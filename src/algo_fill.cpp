@@ -110,7 +110,8 @@ void algo_fill(Run& R, const Params& P) {
                         R.sleep_ms(j.dwell);
                     R.sync();
                 }
-                for (u64 r = 0; r < o.reads && !R.stop; r++)
+                const int skip = DDR5_INJECT_IF(skip_window, R, tid, vw); // E2f test hook, 0 in the real build
+                for (u64 r = 0; r < o.reads && !R.stop && !skip; r++)
                     walk(R, ov, vo.rev, [&](u64 i) {
                         const u8* a = vw.base + i * kLineBytes;
                         Line e, act;
@@ -119,7 +120,7 @@ void algo_fill(Run& R, const Params& P) {
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "verify");
                     });
-                if (o.reads && !R.stop)
+                if (o.reads && !R.stop && skip != 1)
                     R.mark_verified(vw.base,
                                     vw.n);
             });

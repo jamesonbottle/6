@@ -88,6 +88,7 @@ void algo_chase(Run& R, const Params& P) {
                         Line e;
                         make(p[k], act[k].w[0], e);
                         R.vtick();
+                        DDR5_INJECT(audit_line, a); // E2f: the chase compares with memcmp, not IO::verify
                         if (memcmp(&act[k], &e, kLineBytes) != 0 || act[k].w[0] >= w.n) {
                             R.report(tid, a, e, act[k], "chase");
                             // The stored pointer cannot be trusted.

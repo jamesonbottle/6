@@ -9,10 +9,98 @@
 #include "lineio.h"
 #include "run.h"
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <stdexcept>
 
 namespace ddr5::inject {
+
+// ---- E2f: line-level audit of the coverage map -------------------------------------------------------------
+// One flag byte per 64-byte line of the region, set by audit_line() from IO::verify and the chase. Atomic bytes
+// with relaxed stores, so TSan sees no race even when two threads touch neighbouring lines.
+namespace {
+struct Audit {
+    const u8* base = nullptr;
+    u64 lines = 0;
+    std::unique_ptr<std::atomic<u8>[]> seen;
+};
+Audit g_audit;
+Run* g_run = nullptr;
+u64 g_stopAfter = 0; // DDR5TEST_STOP_AFTER_COMPARES: raise Stop after this many compared lines (0 = never)
+std::atomic<u64> g_compares{0};
+} // namespace
+
+void audit_line(const void* a) {
+    const u8* p = (const u8*)a;
+    if (!g_audit.base || p < g_audit.base)
+        return;
+    u64 line = (u64)(p - g_audit.base) / kLineBytes;
+    if (line >= g_audit.lines)
+        return;
+    g_audit.seen[line].store(1, std::memory_order_relaxed);
+    // a reproducible "stop in the middle of a verify" for the selftest (a real SIGINT lands at a random moment)
+    if (g_stopAfter && g_compares.fetch_add(1, std::memory_order_relaxed) + 1 == g_stopAfter)
+        g_run->stop = true;
+}
+
+void audit_begin(Run& R) {
+    g_audit.base = nullptr; // no recording while the new vector is built
+    g_audit.lines = R.layout.regionBytes.load() / kLineBytes;
+    g_audit.seen.reset(g_audit.lines ? new std::atomic<u8>[g_audit.lines]() : nullptr);
+    g_run = &R;
+    const char* e = getenv("DDR5TEST_STOP_AFTER_COMPARES");
+    g_stopAfter = e ? strtoull(e, nullptr, 10) : 0;
+    g_compares = 0;
+    g_audit.base = R.layout.region;
+}
+
+void audit_report(Run& R) {
+    const u64 pages = R.cover.pages_total();
+    if (!g_audit.base || !pages) {
+        R.log.emitf("audit: no region\n");
+        return;
+    }
+    u64 marked = 0, compared = 0, markedNot = 0, comparedNot = 0, firstUn = 0, lastUn = 0, firstBad = 0;
+    bool anyUn = false;
+    for (u64 pg = 0; pg < pages; pg++) {
+        bool full = true;
+        for (u64 l = 0; l < (u64)kLinesPerPage && full; l++)
+            full = g_audit.seen[pg * kLinesPerPage + l].load(std::memory_order_relaxed) != 0;
+        bool m = R.cover.marked(pg);
+        marked += m;
+        compared += full;
+        if (m && !full) {
+            if (!markedNot)
+                firstBad = pg;
+            markedNot++;
+        }
+        if (full && !m)
+            comparedNot++;
+        if (!m) {
+            if (!anyUn)
+                firstUn = pg;
+            lastUn = pg;
+            anyUn = true;
+        }
+    }
+    // marked_not_compared must be 0 (the map never claims more than the audit saw); compared_not_marked may be
+    // above 0 (a stopped job compared lines it never marked); unmarked_first/last: the unmarked pages, if any
+    R.log.emitf("audit: pages=%llu marked=%llu compared=%llu marked_not_compared=%llu compared_not_marked=%llu "
+                "unmarked_first=%lld unmarked_last=%lld first_marked_not_compared=%lld\n",
+                (unsigned long long)pages, (unsigned long long)marked, (unsigned long long)compared,
+                (unsigned long long)markedNot, (unsigned long long)comparedNot, anyUn ? (long long)firstUn : -1LL,
+                anyUn ? (long long)lastUn : -1LL, markedNot ? (long long)firstBad : -1LL);
+}
+
+// DDR5TEST_SKIP_WINDOW=1: thread 0's first window is not verified and not marked; =2: not verified, still marked
+int skip_window(Run& R, int tid, const View& vw) {
+    if (tid != 0 || R.layout.chunks.empty() || vw.base != R.layout.chunks[0].base)
+        return 0;
+    const char* e = getenv("DDR5TEST_SKIP_WINDOW");
+    return e && (e[0] == '1' || e[0] == '2') ? e[0] - '0' : 0;
+}
 
 // XOR `mask` into byte `off` of line number `line`
 static void flip(u8* base, u64 line, int off, u8 mask) {

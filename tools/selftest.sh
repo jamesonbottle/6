@@ -142,6 +142,64 @@ echo "== 3. fault injection: planted faults must be found"
 . tools/inject_checks.sh   # the portable checks (fill, page shuffle, coherency, evolve, march, chase, copy, rwstorm, stop-on-error); the same file runs on the Windows runner
 inject_checks_portable "$OUT/cli_inject" "$OUT"
 check "fill: no log-write warning when the log is healthy" '! grep -q "cannot write to the log file" "$OUT/inj_fill.out"'
+
+echo "== 3b. coverage audit (E2f): the page map must never claim more than the engine really compared"
+# The fault-injection build records every 64-byte line that IO::verify / the chase compares (src/inject.cpp,
+# independent of CoverageMap) and prints one "audit:" line after the coverage line. marked_not_compared must always
+# be 0 (map = subset of the audit); compared_not_marked may be above 0 only where a stop cut a job short.
+audit_f() { sed -n 's/^audit:.*[[:space:]]'"$2"'=\(-\{0,1\}[0-9]\{1,\}\).*/\1/p' "$1" | head -1; }
+# audit_ok FILE: the audit line exists and the map is a subset of it
+audit_ok() { [ -n "$(audit_f "$1" pages)" ] && [ "$(audit_f "$1" marked_not_compared)" = "0" ]; }
+# audit_show FILE: the audit line, for a failure message
+audit_show() { grep -E "^total coverage|^audit" "$1" | cut -c1-200; }
+n=0
+for f in "Solid and checker" "Cross-core verify" "Classic marches" "Evolving data" "Read/write storm, hash data" "Bulk copy" "Page shuffle" "Pointer chase" "Idle gaps"; do
+  n=$((n + 1)); aout="$OUT/aud_full$n.out"
+  if [ "$SAN" = thread ] && [ "${f#Read/write storm}" != "$f" ]; then echo "  SKIP  audit, full run: $f (races by design, see the comment above)"; continue; fi
+  timeout $TMO "$OUT/cli_inject" $RUN -f "$f" --log "$OUT/aud_full$n.log" > "$aout" 2>&1
+  check "audit, full run: $f: map = audit = every page of the region (100%)" 'audit_ok "$aout" && p=$(audit_f "$aout" pages) && [ "$p" -gt 0 ] && [ "$(audit_f "$aout" marked)" = "$p" ] && [ "$(audit_f "$aout" compared)" = "$p" ] && [ "$(audit_f "$aout" compared_not_marked)" = "0" ] || { audit_show "$aout"; false; }'
+done
+timeout $TMO "$OUT/cli_inject" $RUN -f "Cache coherency" --log "$OUT/aud_coh.log" > "$OUT/aud_coh.out" 2>&1
+check "audit, full run: Cache coherency verifies no region lines and the map marks none (by design)" 'audit_ok "$OUT/aud_coh.out" && [ "$(audit_f "$OUT/aud_coh.out" marked)" = "0" ] && [ "$(audit_f "$OUT/aud_coh.out" compared)" = "0" ] || { audit_show "$OUT/aud_coh.out"; false; }'
+# --coverage 100 and the two controls use "Idle gaps" on 64 MB / 2 threads: every thread's window is its whole chunk
+CV="-mb 64 -t 2 --no-large-pages --test-seconds 3 -f Idle\ gaps --coverage 100"
+eval "timeout $TMO \"$OUT/cli_inject\" $CV --log \"$OUT/aud_c100.log\" > \"$OUT/aud_c100.out\" 2>&1"
+check "audit, --coverage 100: stops on its own with the reason, and the audit saw every page too" 'audit_ok "$OUT/aud_c100.out" && p=$(audit_f "$OUT/aud_c100.out" pages) && grep -q "coverage target reached" "$OUT/aud_c100.out" && [ "$(audit_f "$OUT/aud_c100.out" marked)" = "$p" ] && [ "$(audit_f "$OUT/aud_c100.out" compared)" = "$p" ] || { audit_show "$OUT/aud_c100.out"; false; }'
+# negative control 1: thread 0 skips the verify of its whole window (and, like a real skipping algo, does not mark it)
+eval "DDR5TEST_SKIP_WINDOW=1 timeout $TMO \"$OUT/cli_inject\" $CV --log \"$OUT/aud_skip.log\" > \"$OUT/aud_skip.out\" 2>&1"
+check "audit, control: a skipped window leaves exactly its pages unmarked (first half of the region) and the audit agrees" 'audit_ok "$OUT/aud_skip.out" && p=$(audit_f "$OUT/aud_skip.out" pages) && h=$((p / 2)) && [ "$(audit_f "$OUT/aud_skip.out" marked)" = "$h" ] && [ "$(audit_f "$OUT/aud_skip.out" compared)" = "$h" ] && [ "$(audit_f "$OUT/aud_skip.out" compared_not_marked)" = "0" ] && [ "$(audit_f "$OUT/aud_skip.out" unmarked_first)" = "0" ] && [ "$(audit_f "$OUT/aud_skip.out" unmarked_last)" = "$((h - 1))" ] || { audit_show "$OUT/aud_skip.out"; false; }'
+check "audit, control: with that window skipped, --coverage 100 does NOT stop on its own (no 'coverage target reached', 50.0%)" '! grep -q "coverage target reached" "$OUT/aud_skip.out" && grep -q "^total coverage: 50.0% of" "$OUT/aud_skip.out" || { audit_show "$OUT/aud_skip.out"; false; }'
+# negative control 2: the algo skips the verify but still marks the window: the audit must catch the overstated map
+eval "DDR5TEST_SKIP_WINDOW=2 timeout $TMO \"$OUT/cli_inject\" $CV --log \"$OUT/aud_lie.log\" > \"$OUT/aud_lie.out\" 2>&1"
+check "audit, control: marking a window that was never compared is caught (map says 100%, audit sees half; first bad page 0)" 'p=$(audit_f "$OUT/aud_lie.out" pages) && [ -n "$p" ] && [ "$(audit_f "$OUT/aud_lie.out" marked)" = "$p" ] && [ "$(audit_f "$OUT/aud_lie.out" marked_not_compared)" = "$((p / 2))" ] && [ "$(audit_f "$OUT/aud_lie.out" first_marked_not_compared)" = "0" ] || { audit_show "$OUT/aud_lie.out"; false; }'
+# a stop raised in the middle of the verify (hook: after 300000 compared lines): never a superset, whatever the algo
+for f in "Idle gaps" "Classic marches" "Evolving data" "Bulk copy" "Page shuffle" "Pointer chase" "Read/write storm, hash data"; do
+  if [ "$SAN" = thread ] && [ "${f#Read/write storm}" != "$f" ]; then echo "  SKIP  audit, stop mid-verify: $f (races by design, see the comment above)"; continue; fi
+  DDR5TEST_STOP_AFTER_COMPARES=300000 timeout $TMO "$OUT/cli_inject" $RUN -f "$f" --log "$OUT/aud_stp.log" > "$OUT/aud_stp.out" 2>&1
+  check "audit, stop in the middle of a verify: $f: map is a subset of the audit and short of the whole region" 'audit_ok "$OUT/aud_stp.out" && [ "$(audit_f "$OUT/aud_stp.out" marked)" -lt "$(audit_f "$OUT/aud_stp.out" pages)" ] || { audit_show "$OUT/aud_stp.out"; false; }'
+done
+DDR5TEST_STOP_AFTER_COMPARES=300000 timeout $TMO "$OUT/cli_inject" $RUN -f "Idle gaps" --log "$OUT/aud_stp.log" > "$OUT/aud_stp.out" 2>&1
+check "audit, stop in the middle of a verify: lines compared by the cut-short job are NOT marked (compared > marked)" 'audit_ok "$OUT/aud_stp.out" && [ "$(audit_f "$OUT/aud_stp.out" compared_not_marked)" -gt 0 ] || { audit_show "$OUT/aud_stp.out"; false; }'
+# a real SIGINT at a few moments of one run (the coverage differs from machine to machine, the subset rule does not)
+if [ "$SAN" = thread ]; then
+  echo "  SKIP  audit, SIGINT (TSan is too slow for the timing)"
+else
+  audit_sigint_ok() {
+    local d p i
+    for d in 0.2 0.5 0.8 1.4; do
+      "$OUT/cli_inject" -mb 256 -t 2 --no-large-pages --test-seconds 20 -f "Idle gaps" --log "$OUT/aud_int.log" > "$OUT/aud_int.out" 2>&1 < /dev/null &
+      p=$!; sleep "$d"; kill -INT $p 2>/dev/null
+      i=0
+      while kill -0 $p 2>/dev/null; do
+        i=$((i + 1)); if [ $i -gt 300 ]; then kill -9 $p 2>/dev/null; wait $p 2>/dev/null; echo "    SIGINT after ${d}s: still running 30 s later (killed)"; return 1; fi
+        sleep 0.1
+      done
+      wait $p
+      audit_ok "$OUT/aud_int.out" || { echo "    SIGINT after ${d}s:"; audit_show "$OUT/aud_int.out"; return 1; }
+    done
+  }
+  check "audit, real SIGINT at 0.2 / 0.5 / 0.8 / 1.4 s: the map is never a superset of what was compared" 'audit_sigint_ok'
+fi
 if [ -w /dev/full ]; then
   # /dev/full opens fine and fails every flush with ENOSPC
   timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --log /dev/full > "$OUT/inj_full.out" 2>&1; rc=$?

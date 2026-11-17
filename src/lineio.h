@@ -1,6 +1,7 @@
 #pragma once
 // lineio.h - 64-byte line store/load/verify at selectable width and cache behaviour.
 #include <type_traits>
+#include "audit.h"
 #include "flush.h"
 #include "types.h"
 
@@ -61,6 +62,9 @@ struct IO {
             acc |= t.w[i] ^ e.w[i];
         if (acc)
             act = t;
+#ifdef DDR5TEST_INJECT
+        inject::audit_line(a); // E2f: this line was really compared (good or bad)
+#endif
         if constexpr (FL)
             flush_line(a);
         CBAR();

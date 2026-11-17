@@ -11,6 +11,7 @@
 #include <vector>
 #include "algo.h"
 #include "build_version.h"
+#include "inject.h"
 #include "log.h"
 #include "params.h"
 #include "platform.h"
@@ -355,6 +356,7 @@ struct SuiteDriver {
     void prepare_region() {
         R.cover.reset(total);
         R.layout.regionBytes.store(total, std::memory_order_release);
+        DDR5_INJECT(audit_begin, R); // E2f: fault-injection builds only
         R.log.emitf("memory %s, large pages: %s\n",
                     locked ? "locked"
                     : stoppedInAlloc
@@ -449,6 +451,7 @@ struct SuiteDriver {
                     R.progress.stopReason.empty() ? "" : "  - ", R.progress.stopReason.c_str());
         R.log.emitf("total coverage: %.1f%% of the %llu pages (4 KiB) of the %.2f GiB tested region verified\n",
                     R.cover.percent(), (unsigned long long)R.cover.pages_total(), total / 1073741824.0);
+        DDR5_INJECT(audit_report, R); // E2f: fault-injection builds only
         R.log.emitf("total verified passes: %.1fx\n", (double)R.progress.vtotal.load() / (double)total);
         if (R.errors.logFailed)
             R.log.emitf("WARNING: writing to the log file '%s' failed (see above): its error details are incomplete\n",
