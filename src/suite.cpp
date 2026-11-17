@@ -416,9 +416,12 @@ struct SuiteDriver {
         algos().at(t.algo())(R, t.p);
         double el = plat::now() - ts;
         u64 bad = R.st.lines.load();
-        R.log.emitf("    %s  %.1fs  %.1f GB/s avg   verified passes this test %.1fx\n",
-                    bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el, R.progress.done.load() / 1e9 / std::max(el, 1e-9),
-                    (double)R.progress.vbytes.load() / (double)total);
+        // coverage is the whole run's so far (4 KiB virtual pages, every line compared); passes are this test's
+        R.log.emitf("    %s  %.1fs  %.1f GB/s avg   %s\n", bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el,
+                    R.progress.done.load() / 1e9 / std::max(el, 1e-9),
+                    covered_text(R.cover.pages_covered(), R.cover.pages_total(),
+                                 (double)R.progress.vbytes.load() / (double)total)
+                        .c_str());
         return bad;
     }
 
@@ -449,8 +452,10 @@ struct SuiteDriver {
         R.log.emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el,
                     R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
                     R.progress.stopReason.empty() ? "" : "  - ", R.progress.stopReason.c_str());
-        R.log.emitf("total coverage: %.1f%% of the %llu pages (4 KiB) of the %.2f GiB tested region verified\n",
-                    R.cover.percent(), (unsigned long long)R.cover.pages_total(), total / 1073741824.0);
+        R.log.emitf("total coverage: %s%% of the %llu pages (4 KiB, virtual addresses) of the %.2f GiB tested region "
+                    "verified\n",
+                    percent_text(R.cover.pages_covered(), R.cover.pages_total()).c_str(),
+                    (unsigned long long)R.cover.pages_total(), total / 1073741824.0);
         DDR5_INJECT(audit_report, R); // E2f: fault-injection builds only
         R.log.emitf("total verified passes: %.1fx\n", (double)R.progress.vtotal.load() / (double)total);
         if (R.errors.logFailed)

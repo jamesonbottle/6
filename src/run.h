@@ -324,8 +324,9 @@ void Run::parallel(F fn) {
                     lab = label;
                 }
                 char buf[220];
-                snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu (this test %llu)",
-                         t - t0, lab.c_str(), rate, layout.regionBytes ? cover.percent() : 0.0,
+                snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %5s%%  errors: %llu (this test %llu)",
+                         t - t0, lab.c_str(), rate,
+                         layout.regionBytes ? percent_text(cover.pages_covered(), cover.pages_total()).c_str() : "0.0",
                          (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
                          (unsigned long long)st.lines.load());
                 if (log.console && log.tty) {

@@ -2,7 +2,9 @@
 // coverage.h - which pages of the tested region have really been verified (real addresses
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 #include "types.h"
 
@@ -72,6 +74,20 @@ class CoverageMap {
     u64 nwords_ = 0; // 64-bit words holding the bits
     std::unique_ptr<std::atomic<u64>[]> words_;
 };
+
+// "62.5": the share of pages covered, one decimal, rounded DOWN so that anything short of every page never
+// reads "100.0" (0 for an empty map).
+inline std::string percent_text(u64 covered, u64 total) {
+    u64 tenths = total ? covered * 1000 / total : 0;
+    return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10);
+}
+
+// "covered 62.5% of 16384 pages (3.0 passes)": the per-test line of the console / log.
+inline std::string covered_text(u64 covered, u64 total, double passes) {
+    char buf[64];
+    snprintf(buf, sizeof buf, "%.1f", passes);
+    return "covered " + percent_text(covered, total) + "% of " + std::to_string(total) + " pages (" + buf + " passes)";
+}
 
 // Calls mark(firstPage, pageCount) for every maximal run of pages in [0
 template <class F>

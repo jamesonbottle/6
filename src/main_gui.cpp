@@ -177,8 +177,10 @@ void refresh() {
     u64 s = (u64)t;
     setText(A.hDur,
             std::to_wstring(s / 86400) + L":" + two(s / 3600 % 24) + L":" + two(s / 60 % 60) + L":" + two(s % 60));
-    double cov = S.pagesTotal ? 100.0 * (double)S.pagesCovered / (double)S.pagesTotal : 0.0;
-    setText(A.hCov, std::to_wstring((u64)cov) + L" %");
+    {
+        const std::string pct = percent_text(S.pagesCovered, S.pagesTotal); // one decimal, never 100.0 early
+        setText(A.hCov, std::wstring(pct.begin(), pct.end()) + L" %");
+    }
     u64 err = S.errors;
     setText(A.hErr, std::to_wstring(err));
     if (err != A.lastErr) {
@@ -462,8 +464,8 @@ void build_ui() {
     group(L"Test status", X, y, W, 102, 0);
     label(L"Duration:", X + 10, y + 20, 90, 0);
     A.hDur = label(L"0:00:00:00", X + 110, y + 20, 100, 0, SS_RIGHT, ID_DUR);
-    label(L"Coverage:", X + 10, y + 38, 90, 0);
-    A.hCov = label(L"0 %", X + 110, y + 38, 100, 0, SS_RIGHT, ID_COV);
+    label(L"Pages verified:", X + 10, y + 38, 100, 0);
+    A.hCov = label(L"0.0 %", X + 110, y + 38, 100, 0, SS_RIGHT, ID_COV);
     label(L"Error count:", X + 10, y + 56, 90, 0);
     A.hErr = label(L"0", X + 110, y + 56, 100, 0, SS_RIGHT, ID_ERR);
     A.hTest = label(L"", X + 10, y + 78, W - 20, 0, SS_LEFT | SS_ENDELLIPSIS, ID_TEST);

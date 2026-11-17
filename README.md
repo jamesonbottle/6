@@ -14,7 +14,7 @@ C++20 / CMake memory tester for DDR5. Win32 GUI + console tool from one engine; 
 - Allocation retry - on failure retries 90%, 80% ... 20% of plan, logs `testing X GiB instead of Y GiB planned`; exits 2 only if all fail.
 - Start / Stop - runs until Stop. Stop is a hard stop (no false errors; unverified pages are skipped).
 - Stop on error - GUI default on; CLI default off.
-- Coverage - % of 4 KiB virtual pages fully verified in the tested region; `--coverage N` stops at N%. "Passes" counts bytes verified.
+- Coverage - real addresses, not a byte counter: % of the 4 KiB **virtual** pages of the tested region whose 64 lines were ALL compared by a verify that ran to the end. Physical addresses are not visible to a user-mode program (and the OS may remap pages), so they are not tracked. A Stop leaves a cut-short job unmarked, so stopping never raises coverage. Shown rounded down to 0.1 %, so anything short of every page never reads 100.0. Console / log per-test line: `covered X.X% of N pages (P passes)` (coverage of the whole run so far, passes of that test); GUI "Pages verified:"; `--coverage N` stops at N %.
 - Log - `ddr5ramtest.log` next to exe (or `%TEMP%`); CLI `ddr5test.log` or `--log FILE`. Error line: addr, region offset, expected/actual, DQ lane/beat, x8 ODECC codeword guess, transient/stable/unstable.
 - Exit codes (CLI) - 0 clean, 1 errors, 2 bad option / could not start, 3 internal error.
 - Ctrl-C (CLI) - stops cleanly with summary; second Ctrl-C kills.

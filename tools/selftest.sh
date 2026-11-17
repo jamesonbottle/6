@@ -52,7 +52,7 @@ check "xorshift RNG option runs clean (hash tests with the new final mix)" 'time
 check "--fpu: FPU stress threads next to a memory test cause no false error, and the run ends (exit 0, threads joined)" 'timeout $TMO "$OUT/cli" $RUN --fpu -f "Solid and checker" --log "$OUT/fpu.log" > "$OUT/fpu.out" 2>&1; rc=$?; [ $rc -eq 0 ] && ! grep -q "^ERROR" "$OUT/fpu.log" 2>/dev/null || { echo "    rc=$rc"; grep "run seed" "$OUT/fpu.out"; tail -4 "$OUT/fpu.out"; false; }'
 log="$OUT/cov.log"; rm -f "$log"
 timeout $TMO "$OUT/cli" -mb 2 -t 1 --no-large-pages -f "Bulk copy" --log "$log" > "$OUT/cov.out" 2>&1
-check "verified-passes counter exact on a 2 MB region (3 full verifies = 3.0x)" 'grep -q "verified passes this test 3.0x" "$OUT/cov.out" || { grep passes "$OUT/cov.out"; false; }'
+check "per-test line on a 2 MB region: covered 100.0% of 512 pages (3 full verifies = 3.0 passes)" 'grep -q "covered 100.0% of 512 pages (3.0 passes)" "$OUT/cov.out" || { grep passes "$OUT/cov.out"; false; }'
 check "coverage on that 2 MB region is 100.0% of its 512 pages" 'grep -q "total coverage: 100.0% of the 512 pages" "$OUT/cov.out" || { grep coverage "$OUT/cov.out"; false; }'
 # --coverage N now stops on real pages covered (coverage.h), not on bytes verified.
 covpct() { sed -n 's/^total coverage: \([0-9.]*\)%.*/\1/p' "$1" | head -1; }

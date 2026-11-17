@@ -1767,6 +1767,25 @@ static void test_pages_except() {
 }
 
 // E2b: the algos mark the pages they really verified in Run::cover.
+// The coverage texts of the console / log and the GUI (E2e): one decimal, rounded down, exact wording.
+static void test_coverage_text() {
+    CHECK(percent_text(0, 0) == "0.0", "empty map: %s", percent_text(0, 0).c_str());
+    CHECK(percent_text(0, 512) == "0.0" && percent_text(512, 512) == "100.0", "ends: %s %s",
+          percent_text(0, 512).c_str(), percent_text(512, 512).c_str());
+    CHECK(percent_text(1, 3) == "33.3" && percent_text(2, 3) == "66.6", "rounds down: %s %s",
+          percent_text(1, 3).c_str(), percent_text(2, 3).c_str());
+    CHECK(percent_text(16383, 16384) == "99.9", "one page short of the whole region is not 100.0: %s",
+          percent_text(16383, 16384).c_str());
+    CHECK(percent_text(1, 1000000) == "0.0", "a sliver is 0.0: %s", percent_text(1, 1000000).c_str());
+    CHECK(percent_text(1ull << 36, 1ull << 36) == "100.0", "64-bit sizes do not overflow");
+    CHECK(covered_text(512, 512, 3.0) == "covered 100.0% of 512 pages (3.0 passes)", "wording: %s",
+          covered_text(512, 512, 3.0).c_str());
+    CHECK(covered_text(10240, 16384, 0.25) == "covered 62.5% of 16384 pages (0.2 passes)", "wording 2: %s",
+          covered_text(10240, 16384, 0.25).c_str());
+    CHECK(covered_text(0, 0, 0.0) == "covered 0.0% of 0 pages (0.0 passes)", "empty: %s",
+          covered_text(0, 0, 0.0).c_str());
+}
+
 static void test_coverage_hooks() {
     struct Out {
         u64 covered, total;
@@ -1929,6 +1948,7 @@ int main() {
     test_coverage_map();
     test_pages_except();
     test_coverage_hooks();
+    test_coverage_text();
     test_fpu_kernel();
     test_report();
     test_fill_opts();
