@@ -1,0 +1,192 @@
+// ddr5test CLI front-end (console).
+#include <cctype>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
+#include <sstream>
+#include <string>
+#include <vector>
+#include "build_version.h"
+#include "cpu_check.h"
+#include "log.h"
+#include "params.h"
+#include "platform.h"
+#include "run.h"
+#include "suite.h"
+#include "types.h"
+#ifdef _WIN32
+#include <io.h>
+#define IS_TTY(fd) _isatty(fd)
+#else
+#define IS_TTY(fd) isatty(fd)
+#endif
+
+using namespace ddr5;
+
+static void usage() {
+    puts("ddr5test_cli [-mb MB] [-t threads] [-l loops] [-f name-filter] [--quick] [--coverage PCT] [--minutes N]\n"
+         "             [--test-seconds N] [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] "
+         "[--fpu]\n"
+         "             [--flush auto|clflush|clflushopt]   (how flushed accesses evict lines; auto = CLFLUSHOPT when "
+         "the CPU "
+         "has it)\n"
+         "             [--seed N|0xHEX]   (each run picks a random seed and prints it; pass it back with the same -mb "
+         "/ -t to repeat the run)\n"
+         "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list] [--version]\n"
+         "             (--log FILE that cannot be opened = exit 2; the default ddr5test.log that cannot be opened only "
+         "warns)\n"
+         "Ctrl-C stops the run after the current step and prints the summary; a second Ctrl-C ends the process at "
+         "once\n"
+         "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / log file / not enough "
+         "memory), 3 = "
+         "internal error");
+}
+
+int main(int argc, char** argv) {
+    // First, before anything else: the rest of the program is compiled for AVX2 and would crash on a CPU
+    if (const Avx2Status avx = avx2_status(); avx != Avx2Status::Ok) {
+        fprintf(stderr, "%s\n", avx2_message(avx));
+        return 2;
+    }
+    Settings s;
+    s.loops = 1;
+    s.stopOnError = false;
+    bool list = false;
+    for (int i = 1; i < argc; i++) {
+        // Option values are checked: a typo such as "-mb abc" must not silently turn into "use 90 % of free
+        std::string a = argv[i];
+        bool bad = false;
+        auto nx = [&]() -> std::string {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "option %s needs a value\n", a.c_str());
+                bad = true;
+                return "";
+            }
+            return argv[++i];
+        };
+        auto num = [&](u64 maxv) -> u64 { // non-negative whole number <= maxv
+            std::string v = nx();
+            if (bad)
+                return 0;
+            char* e = nullptr;
+            errno = 0;
+            unsigned long long x = v.empty() || v[0] == '-' || v[0] == '+' ? 0 : strtoull(v.c_str(), &e, 10);
+            if (v.empty() || v[0] == '-' || v[0] == '+' || !e || *e || errno || x > maxv) {
+                fprintf(stderr, "bad value '%s' for %s (expected a whole number from 0 to %llu)\n", v.c_str(),
+                        a.c_str(), (unsigned long long)maxv);
+                bad = true;
+                return 0;
+            }
+            return x;
+        };
+        auto choice = [&](std::initializer_list<const char*> names)
+            -> int {
+            std::string v = lower(nx());
+            if (bad)
+                return -1;
+            int k = 0;
+            for (const char* n : names) {
+                if (v == n)
+                    return k;
+                k++;
+            }
+            std::string all;
+            for (const char* n : names)
+                all += std::string(all.empty() ? "" : "|") + n;
+            fprintf(stderr, "bad value '%s' for %s (expected %s)\n", v.c_str(), a.c_str(), all.c_str());
+            bad = true;
+            return -1;
+        };
+        const u64 BIG = ~0ull >> 1;
+        if (a == "-mb")
+            s.megabytes = num(BIG >> 20);
+        else if (a == "-t")
+            s.threads = (int)num(4096);
+        else if (a == "-l")
+            s.loops = num(BIG);
+        else if (a == "-f")
+            s.filter = nx();
+        else if (a == "--quick")
+            s.suite = SuiteSet::Quick;
+        else if (a == "--coverage")
+            s.coverageStop = num(BIG >> 8);
+        else if (a == "--minutes") {
+            std::string v = nx();
+            char* e = nullptr;
+            double m = v.empty() ? -1.0 : strtod(v.c_str(), &e);
+            if (!bad && (v.empty() || !e || *e || !(m >= 0.0) || m > 1e7)) {
+                fprintf(stderr, "bad value '%s' for --minutes (expected a number of minutes >= 0)\n", v.c_str());
+                bad = true;
+            }
+            s.minutes = m;
+        } else if (a == "--test-seconds")
+            s.testSeconds = num(BIG);
+        else if (a == "--cache") {
+            int k = choice({"default", "bypass", "cached", "nt"});
+            if (k >= 0)
+                s.cacheMode = (CacheMode)k; // same order as the enum
+        } else if (a == "--flush") {
+            int k = choice({"auto", "clflush", "clflushopt"});
+            if (k >= 0)
+                s.flushMode = (FlushMode)k; // same order as the enum
+        } else if (a == "--rng") {
+            int k = choice({"default", "splitmix", "murmur", "xorshift"});
+            if (k >= 0)
+                s.rngMode = (Rng)k; // same order as the enum
+        } else if (a ==
+                   "--seed") {
+            std::string v = nx();
+            if (!bad) {
+                bool hex = v.size() > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X');
+                const char* d = v.c_str() + (hex ? 2 : 0);
+                bool plain = *d && *d != '-' && *d != '+' &&
+                             !isspace((unsigned char)*d); // strtoull would silently accept a sign or leading blanks
+                char* e = nullptr;
+                errno = 0;
+                unsigned long long x = plain ? strtoull(d, &e, hex ? 16 : 10) : 0;
+                if (!plain || !e || *e || errno) {
+                    fprintf(stderr, "bad value '%s' for --seed (expected a 64-bit number, decimal or 0x hex)\n",
+                            v.c_str());
+                    bad = true;
+                } else {
+                    s.seed = x;
+                    s.seedSet = true;
+                }
+            }
+        } else if (a == "--fpu")
+            s.stressFpu = true;
+        else if (a == "--keep-going")
+            s.stopOnError = false;
+        else if (a == "--stop-on-error")
+            s.stopOnError = true;
+        else if (a == "--no-large-pages")
+            s.largePages = false;
+        else if (a == "--log") {
+            s.logFile = nx();
+            s.logFileSet = true;
+        } else if (a == "--list")
+            list = true;
+        else if (a == "--version") {
+            printf("ddr5test_cli %s\n", DDR5_VERSION);
+            return 0;
+        } else {
+            usage();
+            return a == "-h" || a == "--help" ? 0 : 2;
+        }
+        if (bad)
+            return 2;
+    }
+    static Logger log; // outlives the static Run below
+    if (list) {
+        int n = 0;
+        for (auto& t : builtin_suite())
+            printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.algo().c_str(), t.name.c_str());
+        return 0;
+    }
+    log.console = true;
+    log.tty = IS_TTY(1) != 0;
+    static Run R(log);
+    plat::install_ctrlc(&R.stop);
+    return run_suite(s, R);
+}

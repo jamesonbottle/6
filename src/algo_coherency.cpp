@@ -1,0 +1,90 @@
+// algo_coherency.cpp - stressapptest-style cache-coherency check (tests cores/fabric, not DRAM cells).
+#include "algo.h"
+#include "gen.h"
+#include "inject.h"
+#include "lineio.h"
+#include "log.h"
+#include "order.h"
+#include "platform.h"
+#include "run.h"
+#include "seed.h"
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <string>
+
+namespace ddr5 {
+
+// algo: coherency (stressapptest-style cache-coherency check)
+const std::set<std::string>& CoherencyOpts::keys() {
+    static const std::set<std::string> k = {"inc", "lines", "seconds"};
+    return k;
+}
+CoherencyOpts CoherencyOpts::from(const Params& P) {
+    CoherencyOpts o;
+    o.lines = P.nums("lines", "2 8 64");
+    o.inc = std::max<u64>(1, P.num("inc", 1000));
+    o.seconds = (double)P.num("seconds", 8);
+    return o;
+}
+void algo_coherency(Run& R, const Params& P) {
+    const CoherencyOpts opt = CoherencyOpts::from(P);
+    const u64 inc = opt.inc; // plain locals: the increment loop below is the hot path
+    const double secs = opt.seconds;
+    int nt = std::min(R.layout.T, 64);
+    std::atomic<bool> fin{false};
+    R.parallel([&](int tid) {
+        for (u64 L : opt.lines) {
+            L = std::min<u64>(std::max<u64>(L, 1), 64);
+            u8* mem = R.layout.region;
+            if (tid == 0) {
+                R.set_label("cache coherency, " + std::to_string(L) + " shared lines, " + std::to_string(nt) +
+                            " threads");
+                std::memset(mem, 0, L * kLineBytes);
+                fin = false;
+            }
+            double end = plat::now() + secs;
+            u32 x = (u32)(splitmix(tid + 1 + R.salt + L * 977) | 1);
+            R.sync();
+            for (;;) {
+                if (tid < nt) {
+                    for (u64 i = 0; i < inc; i++) {
+                        x = (x >> 1) ^ ((0u - (x & 1)) & 0xD0000001u);
+                        u64 line = x % L;
+                        u64 off = (line & (u64)tid & 1) ? (u64)(nt & ~1) - tid
+                                                        : (u64)tid; // owner byte position differs between lines
+                        volatile u8* c = mem + line * kLineBytes + off;
+                        *c = (u8)(*c + 1);
+                    }
+                }
+                DDR5_INJECT(coherency_extra, mem, tid);
+                R.sync();
+                if (tid < nt) {
+                    u64 sum = 0;
+                    for (u64 line = 0; line < L; line++) {
+                        u64 off = (line & (u64)tid & 1) ? (u64)(nt & ~1) - tid : (u64)tid;
+                        volatile u8* c = mem + line * kLineBytes + off;
+                        sum += *c;
+                        *c = 0;
+                    }
+                    if ((sum & 0xFF) != (inc & 0xFF)) {
+                        Line e{}, a{};
+                        e.w[0] = inc & 0xFF;
+                        a.w[0] = sum & 0xFF;
+                        R.report(tid, mem + tid, e, a, "coherency", false);
+                    }
+                    R.add_done(inc * 8);
+                }
+                R.sync();
+                if (tid == 0)
+                    fin = R.stop.load() || plat::now() >= end;
+                R.sync();
+                if (fin.load())
+                    break;
+            }
+            R.sync();
+        }
+    });
+}
+
+} // namespace ddr5
