@@ -175,12 +175,9 @@ void algo_march(Run& R, const Params& P) {
                                  (opt.bursts.size() > 1 || b > 1 ? " burst=" + std::to_string(b) : ""),
                              &v.g, mi, on.second, s, b});
             }
-    u64 base = R.winctr[R.testName];
-    R.winctr[R.testName] += jobs.size();
+    const u64 base = R.claim_windows(jobs.size());
     R.parallel([&](int tid) {
-        for (size_t ji = 0; ji < jobs.size(); ji++) {
-            if (R.stop)
-                break;
+        for_jobs(R, jobs.size(), [&](size_t ji) {
             const Job& j = jobs[ji];
             const auto& els = opt.variants[j.mi].els;
             if (tid == 0)
@@ -244,7 +241,7 @@ void algo_march(Run& R, const Params& P) {
                     DDR5_INJECT(march_after_element, tid, ji, ei, w);
                 }
             });
-        }
+        });
     });
 }
 

@@ -74,12 +74,9 @@ void algo_fill(Run& R, const Params& P) {
                                             (o.dwell_ms.size() > 1 ? " dwell=" + std::to_string(dw) + "ms" : "") +
                                             (dmodes.size() > 1 ? std::string(" disturb=") + dn[dm] : ""),
                                         &v.g, (bool)inv, s, dw, dm});
-    u64 base = R.winctr[R.testName];
-    R.winctr[R.testName] += jobs.size();
+    const u64 base = R.claim_windows(jobs.size());
     R.parallel([&](int tid) {
-        for (size_t ji = 0; ji < jobs.size(); ji++) {
-            if (R.stop)
-                break;
+        for_jobs(R, jobs.size(), [&](size_t ji) {
             const Job& j = jobs[ji];
             if (tid == 0)
                 R.set_label(j.label);
@@ -124,8 +121,7 @@ void algo_fill(Run& R, const Params& P) {
                     R.mark_verified(vw.base,
                                     vw.n);
             });
-            R.sync();
-        }
+        });
         DDR5_INJECT(extra_sync, R, tid);
     });
 }

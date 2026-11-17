@@ -132,18 +132,21 @@ void algo_pagemix(Run& R, const Params& P) {
             rng = splitmix(rng);
             return rng;
         };
+        // This thread's share of the pages: tid, tid + T, tid + 2T, ... (np >= 8 * T, so np > tid). Page number
+        // pg = tid + q * T for step q of the two page loops below.
+        const u64 T = (u64)R.layout.T;
+        const u64 mine = (np - (u64)tid + T - 1) / T;
         if (tid == 0)
             R.set_label("page shuffle: fill");
-        for (u64 pg = tid; pg < np && !R.stop; pg += R.layout.T) {
+        walk_pages(R, mine, [&](u64 q) {
+            const u64 pg = (u64)tid + q * T;
             pp[pg] = pick(nx());
             u8* a = R.layout.region + pg * kPageBytes;
             Gen g = gen(pp[pg]);
             pm_fill<1>(a, g, pp[pg].inv);
             filled[pg] = 1;
-            if (((pg / R.layout.T + 1) & 0x3FF) == 0)
-                R.tick();
             DDR5_INJECT(pagemix_fill_stop, R, tid, pg);
-        }
+        });
         _mm_sfence();
         R.sync();
         if (tid == 0)
@@ -198,15 +201,14 @@ void algo_pagemix(Run& R, const Params& P) {
         if (tid == 0)
             R.set_label("page shuffle: final verify of all pages");
         // Hard stop: Stop (or the first error in stop-on-error mode) ends this verify at the next page.
-        for (u64 pg = tid; pg < np && !R.stop.load(std::memory_order_relaxed); pg += R.layout.T) {
+        walk_pages(R, mine, [&](u64 q) {
+            const u64 pg = (u64)tid + q * T;
             if (!filled[pg])
-                continue;
+                return;
             Gen g = gen(pp[pg]);
             pm_check<1>(R, tid, R.layout.region + pg * kPageBytes, g, pp[pg].inv, "pagemix-final");
-            if (((pg / R.layout.T + 1) & 0x3FF) == 0)
-                R.tick();
             DDR5_INJECT(pagemix_final_stop, R, tid, pg);
-        }
+        });
         R.sync();
     });
 }

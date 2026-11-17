@@ -131,6 +131,13 @@ struct Run {
     CoverageMap cover;
     std::string testName; // the running test; also the key into winctr
     std::map<std::string, u64> winctr;
+    // The first window counter of a test that has `njobs` jobs: job ji uses counter base + ji (see view()), and
+    // the next call for the same test continues after them, so a repeated test moves on to the next windows.
+    u64 claim_windows(u64 njobs) {
+        const u64 base = winctr[testName];
+        winctr[testName] += njobs;
+        return base;
+    }
     std::atomic<bool> stop{false};
     // algo-facing: methods call once per verified 64B line
     void vtick() {
@@ -370,16 +377,53 @@ void Run::parallel(F fn) {
         std::rethrow_exception(failure);
 }
 
-// walk q = 0..n-1 through an order; f(lineIndex)
+// The loop over the jobs of a test, for the algos that have a job list. Call it from inside R.parallel: every
+// thread runs it with the same `njobs`. Per job: stop check, body(ji), then one sync() so that no thread starts
+// the next job (or leaves the test) before all threads have finished this one. The body is everything of the
+// job EXCEPT that last sync() (barrier protocol, rule 1: every thread makes the same number of sync() calls).
 template <class F>
-inline void walk(Run& R, const Order& o, bool down, F&& f) {
-    for (u64 q = 0; q < o.n; q++) {
-        f(o.pos(q, down));
-        if (((q + 1) & 0xFFFF) == 0) {
+inline void for_jobs(Run& R, size_t njobs, F&& body) {
+    for (size_t ji = 0; ji < njobs; ji++) {
+        if (R.stop)
+            break;
+        body(ji);
+        R.sync();
+    }
+}
+
+static_assert((kTickLines & (kTickLines - 1)) == 0, "walk_n polls Stop with a mask");
+// f(q) for q = 0..n-1, the plain sweep. After every kTickLines steps it reports progress (R.tick()) and ends
+// early if Stop is raised, so a Stop is noticed within kTickLines steps, not at the very next one; fewer steps
+// than that never poll, the caller checks Stop before and after (as `if (!R.stop) R.mark_verified(...)` does).
+template <class F>
+inline void walk_n(Run& R, u64 n, F&& f) {
+    for (u64 q = 0; q < n; q++) {
+        f(q);
+        if (((q + 1) & (kTickLines - 1)) == 0) {
             R.tick();
             if (R.stop.load(std::memory_order_relaxed))
                 return;
         }
+    }
+}
+
+// walk q = 0..n-1 through an order; f(lineIndex)
+template <class F>
+inline void walk(Run& R, const Order& o, bool down, F&& f) {
+    walk_n(R, o.n, [&](u64 q) { f(o.pos(q, down)); });
+}
+
+// walk_n for steps that are one 4 KiB page each (pagemix): Stop is polled BEFORE every step, so it ends the loop
+// at the next page boundary (B1: a Stop must not wait for thousands of pages); progress is reported every
+// kTickLines lines' worth of pages, the same amount per R.tick() as walk_n.
+constexpr u64 kPagesPerTick = kTickLines / (u64)kLinesPerPage;
+static_assert((kPagesPerTick & (kPagesPerTick - 1)) == 0, "walk_pages ticks with a mask");
+template <class F>
+inline void walk_pages(Run& R, u64 n, F&& f) {
+    for (u64 q = 0; q < n && !R.stop.load(std::memory_order_relaxed); q++) {
+        f(q);
+        if (((q + 1) & (kPagesPerTick - 1)) == 0)
+            R.tick();
     }
 }
 

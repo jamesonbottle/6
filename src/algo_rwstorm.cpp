@@ -45,12 +45,9 @@ void algo_rwstorm(Run& R, const Params& P) {
     for (auto& v : vars)
         for (u64 s : opt.strides)
             jobs.push_back({v.label, &v.g, s});
-    u64 base = R.winctr[R.testName];
-    R.winctr[R.testName] += jobs.size();
+    const u64 base = R.claim_windows(jobs.size());
     R.parallel([&](int tid) {
-        for (size_t ji = 0; ji < jobs.size(); ji++) {
-            if (R.stop)
-                break;
+        for_jobs(R, jobs.size(), [&](size_t ji) {
             const Job& j = jobs[ji];
             if (tid == 0)
                 R.set_label("rwstorm " + j.label);
@@ -100,8 +97,7 @@ void algo_rwstorm(Run& R, const Params& P) {
                 if (!R.stop)
                     R.mark_verified(w.base, w.n);
             });
-            R.sync();
-        }
+        });
     });
 }
 

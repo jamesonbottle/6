@@ -1058,6 +1058,147 @@ static void test_sync_protocol() {
     }
 }
 
+// The loops the algos share (G2): claim_windows, for_jobs, walk_n, walk, walk_pages.
+static void test_job_helpers() {
+    Logger lg;
+    lg.sink = [](const std::string&) {
+    };
+    { // claim_windows: consecutive per test, independent between tests
+        Run R(lg);
+        R.testName = "a";
+        CHECK(R.claim_windows(3) == 0 && R.claim_windows(2) == 3 && R.claim_windows(0) == 5,
+              "claims of one test must follow each other");
+        R.testName = "b";
+        CHECK(R.claim_windows(4) == 0, "another test starts at 0 again");
+        R.testName = "a";
+        CHECK(R.claim_windows(1) == 5, "going back to the first test continues after its claims");
+    }
+    { // for_jobs: every thread runs every job once, in order, and nobody starts job k + 1 before all finished job k
+        Run R(lg);
+        R.layout.T = 3;
+        std::vector<std::vector<size_t>> seen(3);
+        std::atomic<int> finished[4];
+        for (auto& f : finished)
+            f = 0;
+        std::atomic<int> early{0};
+        R.parallel([&](int tid) {
+            for_jobs(R, 4, [&](size_t ji) {
+                seen[(size_t)tid].push_back(ji);
+                if (ji > 0 && finished[ji - 1].load() != 3)
+                    early++; // the sync() after the previous job was missing
+                if (tid == 0)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20)); // the slow thread
+                finished[ji]++;
+            });
+        });
+        const std::vector<size_t> all = {0, 1, 2, 3};
+        CHECK(seen[0] == all && seen[1] == all && seen[2] == all, "every thread must run jobs 0..3 once, in order");
+        CHECK(early == 0, "%d thread(s) started a job before all threads finished the previous one", early.load());
+    }
+    { // for_jobs: a Stop that is already set runs no job at all
+        Run R(lg);
+        R.layout.T = 2;
+        R.stop = true;
+        std::atomic<int> ran{0};
+        R.parallel([&](int) { for_jobs(R, 5, [&](size_t) { ran++; }); });
+        CHECK(ran == 0, "a stopped run must not start a job (%d ran)", ran.load());
+    }
+    { // for_jobs: a Stop raised inside job 1 (before its sync) ends the loop after job 1 on every thread. A slow
+      // thread may see the Stop before it starts job 1 and skip it, so only thread 0 is sure to have run job 1.
+        Run R(lg);
+        R.layout.T = 3;
+        std::vector<std::vector<size_t>> seen(3);
+        R.parallel([&](int tid) {
+            for_jobs(R, 6, [&](size_t ji) {
+                seen[(size_t)tid].push_back(ji);
+                if (ji == 1 && tid == 0)
+                    R.stop = true;
+            });
+        });
+        bool prefix = true;
+        for (const auto& s : seen)
+            for (size_t k = 0; k < s.size(); k++)
+                prefix = prefix && s[k] == k && k < 2; // in order, nothing after job 1
+        CHECK(prefix, "no thread may run a job after the Stop-raising job 1");
+        CHECK(seen[0] == std::vector<size_t>({0, 1}), "the thread that raised the Stop ran jobs 0 and 1");
+        CHECK(seen[1].size() >= 1 && seen[2].size() >= 1, "every thread ran job 0 (the Stop came later)");
+    }
+    { // walk_n: the sweep, and when it polls Stop
+        Run R(lg);
+        std::vector<u64> v;
+        walk_n(R, 5, [&](u64 q) { v.push_back(q); });
+        CHECK(v == std::vector<u64>({0, 1, 2, 3, 4}), "walk_n visits 0..n-1 in order");
+        u64 c = 0;
+        walk_n(R, 0, [&](u64) { c++; });
+        CHECK(c == 0, "walk_n with n = 0 visits nothing");
+        c = 0;
+        walk_n(R, 3 * kTickLines, [&](u64) { c++; });
+        CHECK(c == 3 * kTickLines, "walk_n without a Stop visits everything (%llu)", (unsigned long long)c);
+        c = 0;
+        walk_n(R, 3 * kTickLines, [&](u64 q) {
+            c++;
+            if (q == 10)
+                R.stop = true;
+        });
+        CHECK(c == kTickLines, "walk_n ends at the first poll after the Stop, %llu steps (poll every %llu)",
+              (unsigned long long)c, (unsigned long long)kTickLines);
+        c = 0; // R.stop is still set: fewer steps than one poll interval never look at it
+        walk_n(R, 100, [&](u64) { c++; });
+        CHECK(c == 100, "under one poll interval nothing polls Stop (%llu)", (unsigned long long)c);
+        c = 0;
+        walk_n(R, 2 * kTickLines, [&](u64) { c++; });
+        CHECK(c == kTickLines, "a Stop that is set before the walk ends it at the first poll (%llu)",
+              (unsigned long long)c);
+    }
+    { // walk goes through an order: the same positions, the same polling
+        Run R(lg);
+        Order o;
+        o.init(Order::SEQ, 6, 1, 0, 0);
+        std::vector<u64> up, down;
+        walk(R, o, false, [&](u64 i) { up.push_back(i); });
+        walk(R, o, true, [&](u64 i) { down.push_back(i); });
+        CHECK(up == std::vector<u64>({0, 1, 2, 3, 4, 5}) && down == std::vector<u64>({5, 4, 3, 2, 1, 0}),
+              "walk over a seq order, up and down");
+        Order r;
+        r.init(Order::RANDOM, 1000, 1, 3, 0);
+        std::vector<int> hit(1000, 0);
+        walk(R, r, false, [&](u64 i) { hit[(size_t)i]++; });
+        bool once = true;
+        for (int h : hit)
+            once = once && h == 1;
+        CHECK(once, "walk over a random order visits every line exactly once");
+        Order big;
+        big.init(Order::SEQ, 2 * kTickLines, 1, 0, 0);
+        u64 c = 0;
+        walk(R, big, false, [&](u64 i) {
+            c++;
+            if (i == 5)
+                R.stop = true;
+        });
+        CHECK(c == kTickLines, "walk polls Stop at the same interval as walk_n (%llu steps)", (unsigned long long)c);
+    }
+    { // walk_pages: Stop is polled before every page
+        Run R(lg);
+        CHECK(kPagesPerTick * (u64)kLinesPerPage == kTickLines, "one page tick is one line tick");
+        u64 c = 0;
+        walk_pages(R, 3 * kPagesPerTick + 5, [&](u64) { c++; });
+        CHECK(c == 3 * kPagesPerTick + 5, "walk_pages without a Stop visits everything (%llu)", (unsigned long long)c);
+        c = 0;
+        walk_pages(R, 0, [&](u64) { c++; });
+        CHECK(c == 0, "walk_pages with n = 0 visits nothing");
+        c = 0;
+        walk_pages(R, 100000, [&](u64 q) {
+            c++;
+            if (q == 6)
+                R.stop = true;
+        });
+        CHECK(c == 7, "a Stop in page 6 must end the loop right after it, %llu pages ran", (unsigned long long)c);
+        c = 0;
+        walk_pages(R, 100000, [&](u64) { c++; });
+        CHECK(c == 0, "a Stop that is already set must not visit a single page (%llu)", (unsigned long long)c);
+    }
+}
+
 // Locking the region in slices (B1, platform.h).
 static void test_lock_slices() {
     using plat::lock_in_slices;
@@ -1939,6 +2080,7 @@ int main() {
     test_run_status();
     test_exceptions();
     test_sync_protocol();
+    test_job_helpers();
     test_lock_slices();
     test_sizing();
     test_start_guard();

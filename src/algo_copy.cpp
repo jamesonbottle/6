@@ -46,12 +46,9 @@ void algo_copy(Run& R, const Params& P) {
     for (auto& v : vars)
         for (auto& m : opt.methods)
             jobs.push_back({v.label + " via " + m, &v.g, lower(m)});
-    u64 base = R.winctr[R.testName];
-    R.winctr[R.testName] += jobs.size();
+    const u64 base = R.claim_windows(jobs.size());
     R.parallel([&](int tid) {
-        for (size_t ji = 0; ji < jobs.size(); ji++) {
-            if (R.stop)
-                break;
+        for_jobs(R, jobs.size(), [&](size_t ji) {
             const Job& j = jobs[ji];
             if (tid == 0)
                 R.set_label("copy " + j.label);
@@ -60,18 +57,13 @@ void algo_copy(Run& R, const Params& P) {
             using io = IO<32, 0, 1>;
             u8* A = w.base;
             u8* B = w.base + nA * kLineBytes;
-            for (u64 i = 0; i < nA; i++) {
+            walk_n(R, nA, [&](u64 i) {
                 u8* a = A + i * kLineBytes;
                 Line l;
                 j.g->make(w.g + i, a, false, l);
                 io::store(a, l);
                 DDR5_INJECT(copy_fill_stop, R, tid, i);
-                if (((i + 1) & 0xFFFF) == 0) {
-                    R.tick();
-                    if (R.stop.load(std::memory_order_relaxed))
-                        break;
-                }
-            }
+            });
             R.sync();
             for (u64 o = 0; o < nA && !R.stop; o += bl) {
                 u8* const s0 = A + o * kLineBytes;
@@ -101,24 +93,18 @@ void algo_copy(Run& R, const Params& P) {
             R.sync();
             DDR5_INJECT(copy_after_copy, tid, ji, A, B, nA);
             for (int side = 0; side < 2 && !R.stop; side++) {
-                for (u64 i = 0; i < nA; i++) {
+                walk_n(R, nA, [&](u64 i) {
                     const u8* a = (side ? B : A) + i * kLineBytes;
                     Line e, act;
                     j.g->make(w.g + i, A + i * kLineBytes, false, e);
                     R.vtick();
                     if (!io::verify(a, e, act))
                         R.report(tid, a, e, act, side ? "copy-dst" : "copy-src");
-                    if (((i + 1) & 0xFFFF) == 0) {
-                        R.tick();
-                        if (R.stop.load(std::memory_order_relaxed))
-                            break;
-                    }
-                }
+                });
                 if (!R.stop)
                     R.mark_verified(side ? B : A, nA); // the source and the copy are marked separately
             }
-            R.sync();
-        }
+        });
     });
 }
 

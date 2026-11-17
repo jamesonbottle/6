@@ -43,29 +43,21 @@ void algo_hammer(Run& R, const Params& P) {
             for (u64 a : opt.aggressors)
                 jobs.push_back({v.label + " rowstride=" + std::to_string(s) + "B " + std::to_string(a) + "-sided", &v.g,
                                 std::max<u64>(1, s / kLineBytes), a});
-    u64 base = R.winctr[R.testName];
-    R.winctr[R.testName] += jobs.size();
+    const u64 base = R.claim_windows(jobs.size());
     R.parallel([&](int tid) {
         u64 rng = splitmix(0xABCD + tid * 7919 + R.salt);
-        for (size_t ji = 0; ji < jobs.size(); ji++) {
-            if (R.stop)
-                break;
+        for_jobs(R, jobs.size(), [&](size_t ji) {
             const Job& j = jobs[ji];
             if (tid == 0)
                 R.set_label("hammer " + j.label);
             View w = R.view(tid, wl, base + ji);
             using io = IO<32, 0, 1>;
-            for (u64 i = 0; i < w.n; i++) {
+            walk_n(R, w.n, [&](u64 i) { // after a Stop the rounds and the victim check below do nothing
                 u8* a = w.base + i * kLineBytes;
                 Line l;
                 j.g->make(w.g + i, a, false, l);
                 io::store(a, l);
-                if (((i + 1) & 0xFFFF) == 0) {
-                    R.tick();
-                    if (R.stop.load(std::memory_order_relaxed))
-                        break; // the rounds and the victim check below are skipped too
-                }
-            }
+            });
             R.sync();
             u64 span = 2 * (j.A - 1) * j.sL + 1;
             if (span < w.n) {
@@ -99,20 +91,18 @@ void algo_hammer(Run& R, const Params& P) {
                 }
             }
             R.sync();
-            for (u64 i = 0; i < w.n && !R.stop; i++) {
-                const u8* a = w.base + i * kLineBytes;
-                Line e, act;
-                j.g->make(w.g + i, a, false, e);
-                R.vtick();
-                if (!io::verify(a, e, act))
-                    R.report(tid, a, e, act, "hammer-victim");
-                if (((i + 1) & 0xFFFF) == 0)
-                    R.tick();
-            }
+            if (!R.stop) // a Stop before the check skips it whole; one during it ends it at the next poll
+                walk_n(R, w.n, [&](u64 i) {
+                    const u8* a = w.base + i * kLineBytes;
+                    Line e, act;
+                    j.g->make(w.g + i, a, false, e);
+                    R.vtick();
+                    if (!io::verify(a, e, act))
+                        R.report(tid, a, e, act, "hammer-victim");
+                });
             if (!R.stop)
                 R.mark_verified(w.base, w.n); // the victim check compared every line of the window
-            R.sync();
-        }
+        });
     });
 }
 
