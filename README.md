@@ -34,21 +34,6 @@ C++20 / CMake memory tester for DDR5. Win32 GUI + console tool from one engine; 
 
 28 tests built around DDR5 behaviour (BL16 bursts, bank groups, row open/close, bus turnaround, idle gaps, DQ crosstalk, address decode, pointer chase, read/write mixes). Full list in `src/suite_data.cpp`.
 
-From stressapptest (reimplemented, no code copied):
-- Pattern table - walking/alternating/busy patterns, 1-8 word repeat, inverted.
-- Page shuffle - 4 KB pages copied, inverted, refilled, then all verified.
-- Cache coherency - threads share lines, sums checked; tests caches, not DRAM.
-
-Not from stressapptest:
-- Evolving data - each line updates every 1-8 passes with a new generation; every line checked against its exact expected generation (finds lost / stray writes).
-
-## Honest limits
-
-- No access to DDR5 timings, voltage, temperature or physical addresses.
-- On-die ECC can hide single-bit errors.
-- Lane / beat / codeword attribution is a hint only (scrambling, lane swaps invisible).
-- Coverage - virtual pages, not physical.
-- Checked on Linux and CI only, not on real DDR5 hardware.
 
 ## Self-test
 
