@@ -82,7 +82,9 @@ void algo_copy(Run& R, const Params& P) {
                 } else
                     for (size_t k = 0; k < nb; k += 32)
                         _mm256_stream_si256((__m256i*)(d + k), _mm256_load_si256((const __m256i*)(s + k)));
-                // The copy leaves its source and destination lines in the cache (memcpy / movsb write through
+                // The copy leaves its source lines (read) and, for memcpy / movsb, its destination lines (normal
+                // stores) in the cache. Flush both so the verify below reads DRAM; without it the cache-sized
+                // tail of the region would be checked from the cache.
                 for (u64 k = 0; k < bl; k++) {
                     flush_line(s0 + k * kLineBytes);
                     flush_line(d0 + k * kLineBytes);
