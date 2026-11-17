@@ -36,8 +36,8 @@
 //   coherency lines list, inc, seconds     (the first `lines` lines of the region, at most 64, no window)
 //   chase     mlp list, seeds
 //   copy      method, block
-//   hammer    rowstride, aggressors, acts, rounds     (no built-in test uses hammer or probe; see git history for the
-//   probe     samples, stride                          old row-hammer blocks)
+//   hammer    rowstride, aggressors, acts, rounds     (no built-in test uses hammer or probe: they are extras, see
+//   probe     samples, stride                          README "Extra algorithms"; unit_tests test_extra_algos covers them)
 // clang-format on
 
 #include <initializer_list>

@@ -62,6 +62,19 @@ GitHub Actions builds both on `windows-latest`.
 
 Edit `src/suite_data.cpp` and rebuild; selftest fails on misspelled keys.
 
+## Extra algorithms (not in the suite)
+
+`hammer` and `probe` are in the engine, but no built-in test uses them and nothing in the CLI or GUI starts them. To run one, add a test to `src/suite_data.cpp` (keys as listed at the top of that file) and rebuild:
+
+```
+def("Row hammer, 2- and 9-sided", {{"algo", "hammer"}, {"rowstride", "256K 1M"}, {"aggressors", "2 9"}, {"window_mb", "512"}}),
+def("Row-hit vs row-conflict latency", {{"algo", "probe"}}),
+```
+
+- `hammer` - writes the window, then per round picks a random spot, reads + `clflush`es `aggressors` lines (spaced two `rowstride`s apart) `acts` times, puts them back, and finally verifies the whole window. A changed line is reported like any other error (phase `hammer-victim`) and the window counts as covered. A job whose aggressors do not fit the window (9 aggressors at 1M stride in a 4 MB window) hammers nothing and only writes and verifies. Stop ends the loop and skips the check, so it never shows as an error. The row stride is a guess at the DRAM row size, on virtual addresses.
+- `probe` - informational, no pass / fail. One thread, reads only (it never writes the memory), no pages marked as covered. For each `stride` it times a read of a line right after the line `stride` bytes before it and prints median / p10 / p90 and the share of slow reads (likely same bank, other row). A stride longer than the first chunk is skipped; with none left nothing is printed. It needs bare metal, large pages and a quiet machine: in a VM it normally says that the bank structure is not resolvable.
+- Tests - only `unit_tests` (`test_extra_algos`, the option and coverage checks); no end-to-end run and no injected-fault check, because no built-in test reaches them.
+
 ## Layout
 
 ```

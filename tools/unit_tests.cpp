@@ -2045,6 +2045,82 @@ static void test_coverage_text() {
           covered_text(0, 0, 0.0).c_str());
 }
 
+// An algo called straight on a hand-made, zero-filled region of `mb` MB split into two chunks, with keys the
+// caller sets (the built-in suite cannot set them). stopMode: 0 = none, 1 = Stop set before the start, 2 = Stop at
+// the first verified byte, 3 = Stop `stopAfterMs` ms after the start.
+struct DirectRun {
+    u64 covered = 0, total = 0, errors = 0;
+    bool allocated = false;
+    bool untouched = false; // the whole region is still zero afterwards
+    double seconds = 0;
+    std::string log; // everything the algo printed
+};
+static DirectRun run_direct(void (*algo)(Run&, const Params&), std::map<std::string, std::string> keys, int stopMode,
+                            u64 mb = 8, int stopAfterMs = 0) {
+    DirectRun o;
+    std::mutex logMu;
+    Logger lg;
+    lg.sink = [&](const std::string& s) {
+        std::lock_guard<std::mutex> l(logMu);
+        o.log += s;
+    };
+    Run R(lg);
+    const int T = 2;
+    const u64 total = mb << 20, per = total / T;
+    bool got = false, locked = false;
+    std::string note;
+    u8* mem = (u8*)plat::alloc(total, false, got, locked, note);
+    if (!mem) {
+        CHECK(false, "could not allocate the test region");
+        return o;
+    }
+    o.allocated = true;
+    std::memset(mem, 0, total);
+    R.layout.T = T;
+    R.layout.region = mem;
+    for (int t = 0; t < T; t++)
+        R.layout.chunks.push_back({mem + (u64)t * per, per / kLineBytes, (u64)t * (per / kLineBytes)});
+    R.cover.reset(total);
+    R.layout.regionBytes.store(total, std::memory_order_release);
+    R.testName = "direct";
+    Params P;
+    P.m = std::move(keys);
+    if (stopMode == 1)
+        R.stop = true; // before the start: nothing may be marked
+    std::atomic<bool> fin{false};
+    std::thread watcher;
+    if (stopMode == 2)
+        watcher = std::thread([&] {
+            while (!fin && R.status().vtotal == 0)
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+            R.stop = true;
+        });
+    if (stopMode == 3)
+        watcher = std::thread([&] {
+            const double end = plat::now() + stopAfterMs / 1000.0;
+            while (!fin && plat::now() < end)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            R.stop = true;
+        });
+    const double t0 = plat::now();
+    algo(R, P);
+    o.seconds = plat::now() - t0;
+    fin = true;
+    if (watcher.joinable())
+        watcher.join();
+    o.covered = R.cover.pages_covered();
+    o.total = R.cover.pages_total();
+    o.errors = R.error_count();
+    o.untouched = true;
+    for (u64 i = 0; i < total && o.untouched; i += sizeof(u64)) {
+        u64 w;
+        std::memcpy(&w, mem + i, sizeof w);
+        o.untouched = (w == 0);
+    }
+    plat::release(mem, total);
+    return o;
+}
+
 static void test_coverage_hooks() {
     struct Out {
         u64 covered, total;
@@ -2096,47 +2172,8 @@ static void test_coverage_hooks() {
     // Algos that are called directly on a hand-made region, so a test can set keys the suite does not
     auto direct = [](void (*algo)(Run&, const Params&), std::map<std::string, std::string> keys, int stopMode,
                      u64 mb = 8) {
-        Logger lg;
-        lg.sink = [](const std::string&) {
-        };
-        Run R(lg);
-        const int T = 2;
-        const u64 total = mb << 20, per = total / T;
-        bool got = false, locked = false;
-        std::string note;
-        u8* mem = (u8*)plat::alloc(total, false, got, locked, note);
-        Out o{0, 0, -1};
-        if (!mem) {
-            CHECK(false, "could not allocate the test region");
-            return o;
-        }
-        std::memset(mem, 0, total);
-        R.layout.T = T;
-        R.layout.region = mem;
-        for (int t = 0; t < T; t++)
-            R.layout.chunks.push_back({mem + (u64)t * per, per / kLineBytes, (u64)t * (per / kLineBytes)});
-        R.cover.reset(total);
-        R.layout.regionBytes.store(total, std::memory_order_release);
-        R.testName = "direct";
-        Params P;
-        P.m = std::move(keys);
-        if (stopMode == 1)
-            R.stop = true; // before the start: nothing may be marked
-        std::atomic<bool> fin{false};
-        std::thread watcher;
-        if (stopMode == 2)
-            watcher = std::thread([&] {
-                while (!fin && R.status().vtotal == 0)
-                    std::this_thread::sleep_for(std::chrono::microseconds(50));
-                R.stop = true;
-            });
-        algo(R, P);
-        fin = true;
-        if (watcher.joinable())
-            watcher.join();
-        o = Out{R.cover.pages_covered(), R.cover.pages_total(), 0};
-        plat::release(mem, total);
-        return o;
+        DirectRun d = run_direct(algo, std::move(keys), stopMode, mb);
+        return Out{d.covered, d.total, d.allocated ? 0 : -1};
     };
     {
         // 65536 lines per chunk are not a multiple of 12
@@ -2178,6 +2215,58 @@ static void test_coverage_hooks() {
     }
 }
 
+// G5: hammer and probe are not in the built-in suite: nothing in the CLI or the GUI starts them, they run only from a
+// test someone adds to suite_data.cpp (README, "Extra algorithms"). These checks are what keeps them working.
+static void test_extra_algos() {
+    const auto ull = [](u64 v) {
+        return (unsigned long long)v;
+    };
+    { // hammer: a clean region must stay clean; the aggressors are written, hammered, then put back
+        DirectRun d = run_direct(algo_hammer, {{"rounds", "1"}, {"acts", "1000"}}, 0);
+        CHECK(d.errors == 0, "hammer with the default sweep reported %llu bad lines on clean memory", ull(d.errors));
+        // 64K rows make every job fit the 4 MB chunk, so the 9-sided jobs hammer too (at the default 256K / 1M row
+        // strides they are skipped: their span is longer than the window)
+        DirectRun r = run_direct(algo_hammer,
+                                 {{"rowstride", "64K"}, {"aggressors", "2 9"}, {"rounds", "2"}, {"acts", "1000"}}, 0);
+        CHECK(r.errors == 0, "hammer 2 and 9 sided reported %llu bad lines: an aggressor was not restored",
+              ull(r.errors));
+        CHECK(r.total == 2048 && r.covered == r.total,
+              "hammer 2 and 9 sided: the victim check covered %llu of %llu pages", ull(r.covered), ull(r.total));
+        // a Stop inside the activation loop must end it at once, restore the aggressors and check nothing
+        DirectRun s =
+            run_direct(algo_hammer,
+                       {{"rowstride", "64K"}, {"aggressors", "2"}, {"rounds", "1"}, {"acts", "2000000000"}}, 3, 8, 150);
+        CHECK(s.seconds < 10.0, "hammer took %.1f s to stop inside its activation loop", s.seconds);
+        CHECK(s.errors == 0,
+              "hammer stopped in the activation loop reported %llu bad lines (a Stop must not look like an error)",
+              ull(s.errors));
+        CHECK(s.covered == 0, "hammer stopped in the activation loop marked %llu pages", ull(s.covered));
+    }
+    { // probe: informational (no pass / fail), reads only, one thread
+        DirectRun p = run_direct(algo_probe, {{"stride", "64 4K 16M"}, {"samples", "1000"}}, 0);
+        CHECK(p.errors == 0 && p.covered == 0, "probe reported %llu bad lines and marked %llu pages", ull(p.errors),
+              ull(p.covered));
+        CHECK(p.untouched, "probe changed the memory it measures (it must only read)");
+        CHECK(p.log.find("TSC ") != std::string::npos, "probe printed no TSC calibration line: %s", p.log.c_str());
+        CHECK(p.log.find("    64 ") != std::string::npos && p.log.find("    4096 ") != std::string::npos,
+              "probe table lacks the 64 B or 4096 B stride: %s", p.log.c_str());
+        CHECK(p.log.find("16777216") == std::string::npos, "probe measured a stride longer than its chunk: %s",
+              p.log.c_str());
+        CHECK(p.log.find("slow - fast") != std::string::npos || p.log.find("NOT resolvable") != std::string::npos,
+              "probe gave neither of its two verdicts: %s", p.log.c_str());
+        // only strides the chunk cannot hold: no measurements, so nothing is printed (and no out-of-range read)
+        DirectRun big = run_direct(algo_probe, {{"stride", "16M"}, {"samples", "1000"}}, 0);
+        CHECK(big.log.empty() && big.untouched, "probe with no usable stride printed: %s", big.log.c_str());
+        // Stop already set: the sweep is skipped
+        DirectRun z = run_direct(algo_probe, {{"stride", "64"}, {"samples", "1000"}}, 1);
+        CHECK(z.log.empty() && z.errors == 0, "probe with Stop set printed or failed: %s", z.log.c_str());
+        // Stop during a very long sweep: back within seconds, with the table of what was measured
+        DirectRun s = run_direct(algo_probe, {{"stride", "64"}, {"samples", "2000000000"}}, 3, 8, 250);
+        CHECK(s.seconds < 10.0, "probe took %.1f s to stop", s.seconds);
+        CHECK(s.untouched && s.errors == 0, "probe stopped mid-sweep changed memory or failed");
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -2208,6 +2297,7 @@ int main() {
     test_coverage_map();
     test_pages_except();
     test_coverage_hooks();
+    test_extra_algos();
     test_coverage_text();
     test_fpu_kernel();
     test_report();
