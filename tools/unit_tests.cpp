@@ -1596,6 +1596,124 @@ static void test_report() {
     }
 }
 
+// The pure parts of an error report (line_diff.h) and the status line (run_status.h).
+static void test_line_diff() {
+    const Line zero = {};
+    // identical lines differ nowhere
+    {
+        const LineDiff d = diff_line(zero, zero);
+        const CodewordCounts n = codeword_counts(d);
+        CHECK(d.beatMask == 0 && d.laneMask == 0 && d.bits == 0 && d.perBlock[0] == 0 && d.perBlock[3] == 0 &&
+                  n.c[0] + n.c[1] + n.c[2] + n.c[3] == 0,
+              "equal lines must give an empty diff");
+    }
+    // one bit: qword 1 high half = beat 3, bit 0 = lane 0, byte lane 0
+    {
+        Line a = zero;
+        a.w[1] = 1ull << 32;
+        const LineDiff d = diff_line(zero, a);
+        const CodewordCounts n = codeword_counts(d);
+        CHECK(d.beatMask == 0x8u && d.laneMask == 1u && d.bits == 1 && d.beatXor[3] == 1u && d.beatXor[2] == 0,
+              "one bit in beat 3: beats 0x%X lanes 0x%X bits %llu", d.beatMask, d.laneMask, (unsigned long long)d.bits);
+        CHECK(d.perBlock[0] == 1 && d.perBlock[1] == 0 && n.c[0] == 1 && n.c[1] + n.c[2] + n.c[3] == 0,
+              "one wrong bit is one 1b codeword");
+    }
+    // the same lane, different beats, adds up per byte lane; the corners of the line are found
+    {
+        Line a = zero;
+        a.w[0] = 1ull;       // beat 0, lane 0
+        a.w[7] = 1ull << 63; // beat 15, lane 31 = byte lane 3
+        const LineDiff d = diff_line(zero, a);
+        const CodewordCounts n = codeword_counts(d);
+        CHECK(d.beatMask == 0x8001u && d.laneMask == 0x80000001u && d.bits == 2 && d.perBlock[0] == 1 &&
+                  d.perBlock[3] == 1 && n.c[0] == 2,
+              "corner bits: beats 0x%X lanes 0x%X bits %llu", d.beatMask, d.laneMask, (unsigned long long)d.bits);
+        Line b = zero; // 2 bits in one byte of one beat = one 2b codeword
+        b.w[0] = 0x3ull << 8;
+        Line c = zero; // 3 bits in one byte lane = 3-4b; 4 bits = 3-4b; 5 bits = 5+b
+        c.w[0] = 0x7ull;
+        Line c4 = zero;
+        c4.w[0] = 0xFull;
+        Line c5 = zero;
+        c5.w[0] = 0x1Full;
+        const CodewordCounts nb = codeword_counts(diff_line(zero, b)), n3 = codeword_counts(diff_line(zero, c)),
+                             n4 = codeword_counts(diff_line(zero, c4)), n5 = codeword_counts(diff_line(zero, c5));
+        CHECK(nb.c[1] == 1 && nb.c[0] + nb.c[2] + nb.c[3] == 0, "2 wrong bits in one byte lane: class 2b");
+        CHECK(n3.c[2] == 1 && n3.c[0] + n3.c[1] + n3.c[3] == 0, "3 wrong bits in one byte lane: class 3-4b");
+        CHECK(n4.c[2] == 1 && n4.c[0] + n4.c[1] + n4.c[3] == 0, "4 wrong bits in one byte lane: class 3-4b");
+        CHECK(n5.c[3] == 1 && n5.c[0] + n5.c[1] + n5.c[2] == 0, "5 wrong bits in one byte lane: class 5+b");
+        // bits of several beats add up in the same byte lane: 3 + 2 = 5
+        Line m = zero;
+        m.w[0] = 0x7ull | (0x3ull << 32); // beat 0: 3 bits, beat 1: 2 bits, both in byte lane 0
+        const LineDiff dm = diff_line(zero, m);
+        CHECK(dm.perBlock[0] == 5 && codeword_counts(dm).c[3] == 1, "bits of different beats must add up per lane");
+    }
+    // worst case: every bit wrong
+    {
+        Line a;
+        for (int j = 0; j < 8; j++)
+            a.w[j] = ~0ull;
+        const LineDiff d = diff_line(zero, a);
+        const CodewordCounts n = codeword_counts(d);
+        CHECK(d.beatMask == 0xFFFFu && d.laneMask == 0xFFFFFFFFu && d.bits == 512 && d.perBlock[0] == 128 &&
+                  d.perBlock[1] == 128 && d.perBlock[2] == 128 && d.perBlock[3] == 128 && n.c[3] == 4,
+              "all bits wrong: bits %llu", (unsigned long long)d.bits);
+    }
+    // codeword_class: the boundaries
+    CHECK(codeword_class(0) == -1 && codeword_class(1) == 0 && codeword_class(2) == 1 && codeword_class(3) == 2 &&
+              codeword_class(4) == 2 && codeword_class(5) == 3 && codeword_class(128) == 3,
+          "codeword_class boundaries wrong");
+    // re-read classification and its texts
+    {
+        Line e = zero, a = zero, other = zero;
+        e.w[0] = 1;
+        a.w[0] = 2;
+        other.w[0] = 3;
+        CHECK(classify_reread(e, e, a) == Reread::Transient, "re-read equal to the expected data is transient");
+        CHECK(classify_reread(a, e, a) == Reread::Stable, "re-read equal to the first wrong data is stable");
+        CHECK(classify_reread(other, e, a) == Reread::Unstable, "a third value is unstable");
+        CHECK(!strcmp(reread_text(Reread::Skipped), "n/a") &&
+                  !strcmp(reread_text(Reread::LogicalCheck), "(logical check, not a memory line)") &&
+                  !strcmp(reread_text(Reread::Transient), "TRANSIENT(re-read ok: read path/signalling)") &&
+                  !strcmp(reread_text(Reread::Stable), "STABLE(cell/write path/addressing)") &&
+                  !strcmp(reread_text(Reread::Unstable), "UNSTABLE(changes every read)"),
+              "re-read texts changed");
+    }
+    // the whole block, exactly
+    {
+        Line a = zero;
+        a.w[0] = 1ull;
+        a.w[7] = 1ull << 63;
+        const void* addr = (const void*)(uintptr_t)0x1000;
+        char p[40];
+        snprintf(p, sizeof p, "%p", addr);
+        const std::string got =
+            format_error_block(1.54, "T", "verify", 3, addr, 0x40, diff_line(zero, a), Reread::Stable, zero, a);
+        const std::string want = std::string("ERROR t=1.5s test=\"T\" verify thr=3 addr=") + p +
+                                 " off=0x40 beats=0x8001 lanes=0x80000001 bits=2 x8-codewords[1b/2b/3-4b/5+b]=2/0/0/0 "
+                                 "STABLE(cell/write path/addressing)\n"
+                                 "      qword 0: exp=0000000000000000 act=0000000000000001 xor=0000000000000001\n"
+                                 "      qword 7: exp=0000000000000000 act=8000000000000000 xor=8000000000000000\n";
+        CHECK(got == want, "error block wrong:\n%s\nwanted:\n%s", got.c_str(), want.c_str());
+    }
+}
+
+static void test_status_line() {
+    const std::string got = status_line(12.4, "Solid", 3.46, "12.5", 7, 3);
+    const std::string want =
+        "  [   12s] Solid" + std::string(45, ' ') + "   3.5 GB/s  cov  12.5%  errors: 7 (this test 3)";
+    CHECK(got == want, "status line wrong: '%s'", got.c_str());
+    // a long test name is cut to 50 characters, the largest numbers still fit
+    const std::string longName(80, 'x');
+    const std::string big = status_line(99999.0, longName, 99.9, "100.0", ~0ull, ~0ull);
+    CHECK(big.find(std::string(50, 'x') + " ") != std::string::npos &&
+              big.find(std::string(51, 'x')) == std::string::npos && big.size() < 220 &&
+              big.find("errors: 18446744073709551615 (this test 18446744073709551615)") != std::string::npos,
+          "long name / large numbers: '%s'", big.c_str());
+    CHECK(status_line(0, "", 0, "0.0", 0, 0).find("cov   0.0%  errors: 0 (this test 0)") != std::string::npos,
+          "empty status line wrong");
+}
+
 // try_start (GUI start_run, F2): a throwing step (no memory for the Run
 static void test_start_guard() {
     std::string why = "stale";
@@ -2093,6 +2211,8 @@ int main() {
     test_coverage_text();
     test_fpu_kernel();
     test_report();
+    test_line_diff();
+    test_status_line();
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();

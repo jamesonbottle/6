@@ -1,5 +1,7 @@
 #pragma once
-// run.h - Chunk, View, Stats, Layout, Progress, ErrorSink, Run, walk().
+// run.h - Run (the state of one run and the algo-facing API), Run::parallel, and the loop helpers
+// for_jobs / walk_n / walk / walk_pages. The data model is in run_data.h, the error-line logic in line_diff.h,
+// the status-line text in run_status.h.
 #include <algorithm>
 #include <atomic>
 #include <exception>
@@ -14,56 +16,17 @@
 #include <type_traits>
 #include <vector>
 #include "coverage.h"
+#include "line_diff.h"
 #include "log.h"
 #include "order.h"
 #include "params.h"
 #include "platform.h"
+#include "run_data.h"
+#include "run_status.h"
 #include "seed.h"
 #include "types.h"
 
 namespace ddr5 {
-
-// run context Windows (window_mb) are rounded down to a multiple of this many LINES (256 KiB)
-constexpr u64 kWindowGranuleLines = 4096;
-struct Chunk {
-    u8* base;
-    u64 lines;
-    u64 g;
-};
-struct View {
-    u8* base;
-    u64 g;
-    u64 n;
-};
-// A shared counter alone on its cache line
-struct alignas(kLineBytes) Counter : std::atomic<u64> {
-    Counter() : std::atomic<u64>(0) {}
-    using std::atomic<u64>::operator=;
-};
-static_assert(sizeof(Counter) == kLineBytes, "one counter per cache line");
-
-struct Stats {
-    std::atomic<u64> lines{0}, bits{0}, blk[4], trans{0}, stable{0}, unstable{0};
-    Counter lane[32], beat[16], abit[48]; // the hot ones: every error bumps several of them
-    Stats() { clear(); }
-    void clear() {
-        lines = 0;
-        bits = 0;
-        trans = 0;
-        stable = 0;
-        unstable = 0;
-        for (auto& a : lane)
-            a = 0;
-        for (auto& a : beat)
-            a = 0;
-        for (auto& a : blk)
-            a = 0;
-        for (auto& a : abit)
-            a = 0;
-    }
-};
-inline thread_local u64 t_vcount =
-    0;
 
 // Debug check of the barrier protocol (see "Barrier protocol" above struct Run).
 #if !defined(DDR5_CHECK_SYNC) && !defined(NDEBUG)
@@ -80,38 +43,6 @@ inline int sync_count_mismatch(const std::vector<u64>& counts) {
             return (int)i;
     return -1;
 }
-
-// Where the tested memory is and how it is split between the worker threads.
-struct Layout {
-    u8* region = nullptr;
-    std::atomic<u64> regionBytes{0};
-    int T = 1; // worker threads
-    std::vector<Chunk> chunks; // one per thread
-};
-
-// How far the run has got: the byte counters the workers bump, the clocks
-struct Progress {
-    std::atomic<u64> done{0};
-    // passes (HCI/Karhu-style: how many times the tested region has been verified, in bytes)
-    std::atomic<u64> vbytes{0}, vtotal{0};
-    std::atomic<double> tStart{0};
-    double tTestStart = 0; // plat::now() at the start of the current test
-    u64 stopCoverage = 0;
-    double stopSeconds = 0; // stop after this many seconds (0 = off)
-    std::string stopReason;
-};
-
-// Error reporting: the log file, the "first error" times, the counters.
-struct ErrorSink {
-    mutable std::mutex mu; // mutable: Run::status() is const but has to lock it
-    FILE* logf = nullptr;
-    std::atomic<u64> logged{0};
-    // seconds into the run / the current test; -1 = no error yet.
-    std::atomic<double> firstErrRun{-1}, firstErrTest{-1};
-    std::atomic<u64> errTotal{0};
-    // set (once, with a console warning) when a write to errors.logf failed (disk full, device gone)
-    std::atomic<bool> logFailed{false};
-};
 
 struct Run;
 struct Settings;
@@ -226,6 +157,11 @@ struct Run {
 
   private:
     friend struct SuiteDriver; // suite.cpp: the implementation of run_suite
+    // The steps of report() (run.cpp): count the bad line in the statistics, count what a re-read showed,
+    // then write the finished text to the console and the log.
+    u64 count_error(const LineDiff& d, u64 off, double tnow); // returns the number of bad lines of this test
+    void count_reread(Reread r);
+    void publish_error(const std::string& text);
     void vflush() {
         u64 c = t_vcount;
         t_vcount = 0;
@@ -330,18 +266,17 @@ void Run::parallel(F fn) {
                     std::lock_guard<std::mutex> l(errors.mu);
                     lab = label;
                 }
-                char buf[220];
-                snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %5s%%  errors: %llu (this test %llu)",
-                         t - t0, lab.c_str(), rate,
-                         layout.regionBytes ? percent_text(cover.pages_covered(), cover.pages_total()).c_str() : "0.0",
-                         (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
-                         (unsigned long long)st.lines.load());
+                const std::string buf =
+                    status_line(t - t0, lab, rate,
+                                layout.regionBytes ? percent_text(cover.pages_covered(), cover.pages_total()) : "0.0",
+                                errors.errTotal.load(), // run total: st is reset for every test
+                                st.lines.load());
                 if (log.console && log.tty) {
-                    printf("\r%-*.*s", kStatusWidth, kStatusWidth, buf);
+                    printf("\r%-*.*s", kStatusWidth, kStatusWidth, buf.c_str());
                     fflush(stdout);
                 } else if (log.console && t - hb >= 30.0) {
                     hb = t;
-                    printf("%s\n", buf);
+                    printf("%s\n", buf.c_str());
                     fflush(stdout);
                 }
             }

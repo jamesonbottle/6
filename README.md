@@ -73,7 +73,10 @@ src/seed.*             run seed, hash mixer
 src/order.*            address orders
 src/gen.*              data generators
 src/lineio.h           64-byte store / load / verify
-src/run.*              Run, walk, error report
+src/run.*              Run, parallel, walk helpers, Run::report (classify, format, write)
+src/run_data.h         run data model: Chunk, View, Stats, Layout, Progress, ErrorSink
+src/line_diff.h        what differs in a bad line, re-read class, error text (pure)
+src/run_status.h       live status line text
 src/coverage.h         page coverage map
 src/sizing.h           memory sizing / retry plan
 src/flush.*            CLFLUSH / CLFLUSHOPT selection

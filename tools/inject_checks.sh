@@ -10,6 +10,9 @@ inject_checks_portable() {
   check "fill: exactly the 42 planted lines found" '[ "$(grep -c "^ERROR" "$log")" = "42" ]'
   check "fill: 44 flipped bits counted"            'grep -q "42 bad lines, 44 bits" "$OUT/inj_fill.out"'
   check "fill: single-bit and 3-bit faults both logged" 'grep -q "lanes=0x00000001 bits=1" "$log" && grep -Eq "bits=3 " "$log"'
+  # The statistics that Run::report feeds for every bad line (G3 moved this code; nothing else pins it): the planted
+  # faults are fixed, so the lanes, beats, codeword classes and re-read classes are exact.
+  check "fill: DQ lane, beat, x8-codeword and re-read statistics of the planted faults" 'grep -q "DQ lane errors  : \[0\]=41 \[2\]=1 \[7\]=1 \[12\]=1 " "$OUT/inj_fill.out" && grep -q "BL16 beat errors: \[1\]=1 \[2\]=40 \[5\]=1 " "$OUT/inj_fill.out" && grep -q "bit-count 1/2/3-4/5+: 42/1/0/0 *re-read: transient=0 stable=42 unstable=0" "$OUT/inj_fill.out" || { grep -E "DQ lane|BL16 beat|bit-count" "$OUT/inj_fill.out"; false; }'
   log="$OUT/inj_page.log"; rm -f "$log"
   timeout $TMO "$INJ" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_page.out" 2>&1; rc=$?
   check "page shuffle: exit 1, flip caught in final verify" '[ $rc -eq 1 ] && grep -q "pagemix-final" "$log"'
