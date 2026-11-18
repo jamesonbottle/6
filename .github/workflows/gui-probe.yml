@@ -52,7 +52,7 @@ jobs:
           $exe = Join-Path $PWD "build\ddr5ramtest.exe"
           $p = Start-Process $exe -PassThru
           $h = [IntPtr]::Zero
-          for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 500; $h = [W]::FindWindow("Ddr5RamTestWindow", $null) }
+          for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 500; $h = [W]::FindWindow("Ddr5RamTestWindow", [NullString]::Value) }
           Start-Sleep -Seconds 2
           "--- top-level windows of pid $($p.Id) ---" | Tee-Object probe.txt
           [W]::TopLevel([uint32]$p.Id) | Tee-Object probe.txt -Append
