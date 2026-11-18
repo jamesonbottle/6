@@ -1,0 +1,32 @@
+diff --git a/src/main_gui.cpp b/src/main_gui.cpp
+index 4e4b445..7363133 100644
+--- a/src/main_gui.cpp
++++ b/src/main_gui.cpp
+@@ -140,6 +140,19 @@ void show_page(int sel) {
+             ShowWindow(h, p == sel ? SW_SHOW : SW_HIDE);
+ }
+ 
++// CreateWindow puts a new child window BELOW the siblings that already exist. The tab control is created first, so it
++// ended up above every page control and its body covered them: the tabs showed, the page stayed empty (seen on a
++// Windows runner: SysTabControl32 was first in the top-to-bottom order). The same order put each group box above the
++// controls inside it, and those carry WS_CLIPSIBLINGS. Fix: tab at the bottom, then raise the page controls in the
++// order they were created, so every control is above the ones made before it (group boxes below their contents).
++void fix_z_order() {
++    const UINT keep = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
++    SetWindowPos(A.tab, HWND_BOTTOM, 0, 0, 0, 0, keep);
++    for (auto& pg : A.page)
++        for (HWND h : pg)
++            SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, keep);
++}
++
+ void set_running_ui(bool running) {
+     for (HWND h : A.lockWhileRunning)
+         EnableWindow(h, !running);
+@@ -522,6 +535,7 @@ void build_ui() {
+     SendMessageW(A.hThrUd, UDM_SETPOS32, 0, cpus);
+ 
+     A.lockWhileRunning = {A.hMB, A.hMBud, A.hThr, A.hThrUd, A.hStopErr, A.hCache, A.hRng, A.hSet, A.hFpu};
++    fix_z_order();
+     show_page(0);
+     refresh();
+     apply_auto_mb();

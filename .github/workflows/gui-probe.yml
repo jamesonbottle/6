@@ -4,9 +4,17 @@ on:
     branches: [gui-probe]
 jobs:
   probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Apply the fix (after variant only)
+        if: matrix.variant == 'after'
+        shell: bash
+        run: git apply --verbose .github/probe-fix.patch
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Build
         shell: cmd
@@ -38,6 +46,10 @@ jobs:
                 RECT r; GetWindowRect(h, out r);
                 rows.Add(string.Format("hwnd={0} vis={1} {2,-24} [{3},{4} {5}x{6}] '{7}'", h, IsWindowVisible(h) ? 1 : 0, c, r.L, r.T, r.R - r.L, r.B - r.T, t)); return true; }, IntPtr.Zero);
               return rows; }
+            public static IntPtr ChildByText(IntPtr parent, string text) {
+              IntPtr found = IntPtr.Zero;
+              EnumChildWindows(parent, (h, l) => { var t = new StringBuilder(80); GetWindowText(h, t, 80); if (t.ToString() == text) { found = h; return false; } return true; }, IntPtr.Zero);
+              return found; }
             public static List<string> Dump(IntPtr parent) {
               var rows = new List<string>(); int z = 0;
               EnumChildWindows(parent, (h, l) => {
@@ -73,11 +85,25 @@ jobs:
           $g2 = [System.Drawing.Graphics]::FromImage($bmp2)
           $g2.CopyFromScreen($r.L, $r.T, 0, 0, $bmp2.Size); $g2.Dispose()
           $bmp2.Save("screen.png"); $bmp2.Dispose()
+          function DarkPixels($bitmap, $ox, $oy, $child) {
+            $cr = New-Object W+RECT; [void][W]::GetWindowRect($child, [ref]$cr)
+            $n = 0
+            for ($x = $cr.L - $ox; $x -lt $cr.R - $ox; $x++) { for ($y = $cr.T - $oy; $y -lt $cr.B - $oy; $y++) {
+              if ($x -ge 0 -and $y -ge 0 -and $x -lt $bitmap.Width -and $y -lt $bitmap.Height) {
+                $c = $bitmap.GetPixel($x, $y); if (($c.R + $c.G + $c.B) / 3 -lt 110) { $n++ } } } }
+            return $n }
+          "--- visible text check (dark pixels where a label's text must be; 0 = nothing drawn there) ---" | Tee-Object probe.txt -Append
+          foreach ($txt in @("Total memory:", "Duration:", "Pages verified:")) {
+            $c = [W]::ChildByText($h, $txt)
+            $bs = [System.Drawing.Bitmap]::FromFile((Join-Path $PWD "screen.png"))
+            $bp = [System.Drawing.Bitmap]::FromFile((Join-Path $PWD "printwindow.png"))
+            "$txt  real screen: $(DarkPixels $bs $r.L $r.T $c)   PrintWindow: $(DarkPixels $bp $r.L $r.T $c)" | Tee-Object probe.txt -Append
+            $bs.Dispose(); $bp.Dispose() }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: gui-probe
+          name: gui-probe-${{ matrix.variant }}
           path: |
             probe.txt
             printwindow.png
