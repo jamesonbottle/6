@@ -41,6 +41,19 @@
 
 using namespace ddr5;
 
+// True when this program is built with ThreadSanitizer (gcc defines __SANITIZE_THREAD__, clang answers __has_feature).
+#if defined(__SANITIZE_THREAD__)
+constexpr bool kBuiltWithTsan = true;
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+constexpr bool kBuiltWithTsan = true;
+#else
+constexpr bool kBuiltWithTsan = false;
+#endif
+#else
+constexpr bool kBuiltWithTsan = false;
+#endif
+
 static int g_fail = 0;
 static Logger test_log;
 #define CHECK(cond, ...)                                                                                               \
@@ -114,8 +127,7 @@ static void test_windows() {
             CHECK(missed == 0, "lines=%llu wl=%llu: %llu lines never covered by any window", (unsigned long long)lines,
                   (unsigned long long)wl, (unsigned long long)missed);
             if (lines / wl >= 2)
-                for (u64 ctr = 0; ctr < nw * 2;
-                     ctr++) {
+                for (u64 ctr = 0; ctr < nw * 2; ctr++) {
                     View v = R.view(0, wl, ctr), d = R.dview(0, wl, ctr);
                     u64 sv = (u64)(v.base - fake) / 64, sd = (u64)(d.base - fake) / 64;
                     bool inb = sd + wl <= lines, disjoint = sd + wl <= sv || sv + wl <= sd;
@@ -279,8 +291,7 @@ static void test_evolve() {
         CHECK(!outside, "maxp %llu: %llu periods outside 1..maxp", (unsigned long long)mp, (unsigned long long)outside);
     }
     const Rng rngs[] = {Rng::SplitMix, Rng::Murmur, Rng::XorShift};
-    for (int mode = 0; mode < 3;
-         mode++) {
+    for (int mode = 0; mode < 3; mode++) {
         std::set<u64> seen;
         Line a{}, b{}, c{};
         evo_make(7, 3, seed, rngs[mode], a);
@@ -359,8 +370,8 @@ static void test_suite_keys() {
 // --cache (Settings::cacheMode) must reach every algo that has a flush / nt key, evolve included
 static void test_avx2_check() {
     const unsigned avxBits = (1u << 27) | (1u << 28); // OSXSAVE + AVX in CPUID.1:ECX
-    const unsigned avx2Bit = 1u << 5; // CPUID.(7,0):EBX
-    const unsigned long long ymm = 0x7; // XCR0: x87 + SSE + YMM state
+    const unsigned avx2Bit = 1u << 5;                 // CPUID.(7,0):EBX
+    const unsigned long long ymm = 0x7;               // XCR0: x87 + SSE + YMM state
     using S = Avx2Status;
     CHECK(avx2_decide(true, avxBits, avx2Bit, ymm) == S::Ok, "a CPU with AVX2 and YMM state enabled must pass");
     CHECK(avx2_decide(true, avxBits, avx2Bit, 0x3) == S::NoOs, "YMM state off in XCR0 must be NoOs");
@@ -2160,6 +2171,12 @@ static void test_coverage_hooks() {
     } algos[] = {{"fill", "solid and checker"}, {"fill cross", "cross-core verify"}, {"march", "address-in-address"},
                  {"evolve", "evolving data"},   {"rwstorm", "storm, hash data"},     {"copy", "bulk copy"}};
     for (const auto& a : algos) {
+        // Same exclusion as tools/selftest.sh, on purpose and not a suppression: the read/write storm races by design
+        // (the writer rewrites identical data while its partner verifies it), so TSan always reports it.
+        if (kBuiltWithTsan && std::strcmp(a.name, "rwstorm") == 0) {
+            printf("  SKIP  coverage hooks: %s (races by design, see tools/selftest.sh)\n", a.name);
+            continue;
+        }
         Out c = go(a.filter, 8, false);
         CHECK(c.rc == 0 && c.total == (8ull << 20) / kPageBytes && c.covered == c.total,
               "%s: a clean run must cover every page, got %llu of %llu (rc %d)", a.name, (unsigned long long)c.covered,

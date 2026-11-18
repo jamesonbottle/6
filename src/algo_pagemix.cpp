@@ -54,8 +54,7 @@ static void pm_copy(Run& R, int tid, u8* s, u8* d, const Gen& g, bool inv) {
             R.report(tid, s + l * kLineBytes, e, a, "pagemix-src");
             io::store(s + l * kLineBytes, e);
         }
-        io::store(d + l * kLineBytes,
-                  e);
+        io::store(d + l * kLineBytes, e);
     }
     R.mark_verified(s, kLinesPerPage);
 }

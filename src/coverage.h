@@ -29,13 +29,13 @@ class CoverageMap {
         if (endByte < offset)
             endByte = ~(u64)0;
         u64 first = offset / kPageBytes + (offset % kPageBytes ? 1 : 0); // first page that starts inside the range
-        u64 end = endByte / kPageBytes; // one past the last page that ends inside it
+        u64 end = endByte / kPageBytes;                                  // one past the last page that ends inside it
         if (end > total_)
             end = total_;
         if (first >= end)
             return;
         for (u64 w = first / 64; w <= (end - 1) / 64; w++) {
-            u64 lo = w * 64 > first ? 0 : first - w * 64; // first bit of this word in the range
+            u64 lo = w * 64 > first ? 0 : first - w * 64;   // first bit of this word in the range
             u64 hi = w * 64 + 64 < end ? 64 : end - w * 64; // one past the last bit
             u64 m = (hi - lo == 64) ? ~(u64)0 : (((u64)1 << (hi - lo)) - 1) << lo;
             if ((words_[w].load(std::memory_order_relaxed) & m) != m) // skip the write when nothing changes
@@ -70,7 +70,7 @@ class CoverageMap {
     }
 
   private:
-    u64 total_ = 0; // pages in the region (whole pages only)
+    u64 total_ = 0;  // pages in the region (whole pages only)
     u64 nwords_ = 0; // 64-bit words holding the bits
     std::unique_ptr<std::atomic<u64>[]> words_;
 };

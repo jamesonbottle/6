@@ -28,7 +28,7 @@ struct Params {
             reads->insert(k);
     }
     std::string where() const { return test.empty() ? "" : "test '" + test + "': "; }
-    void note_bad(const std::string& what) const; // thread-safe append to `bad`
+    void note_bad(const std::string& what) const;                    // thread-safe append to `bad`
     u64 parse_num(const std::string& k, const std::string& v) const; // pnum_checked(v), recording a failure under key k
     bool has(const std::string& k) const {
         touch(k);

@@ -92,7 +92,7 @@ inline void evo_make(u64 g, u64 gen, u64 seed, Rng rng, Line& o) {
 struct EvoPass {
     static constexpr u64 kMax = 1024;
     u64 seed = 0, maxp = 1, p = 0;
-    std::vector<u64> k; // k[per] = evo_key(seed, p / per)
+    std::vector<u64> k;  // k[per] = evo_key(seed, p / per)
     std::vector<u8> due; // due[per] = (p % per == 0)
     bool tab = false;
     void init(u64 seed_, u64 maxp_) {
@@ -119,18 +119,18 @@ struct EvoPass {
 
 // typed test options One struct per algo, parsed ONCE before R.parallel: the algo body reads fields
 struct FillOpts {
-    OrderSpec write, verify; // order, verify_order (defaults to order)
-    bool strided = false; // either order is a stride order
-    std::vector<u64> strides; // stride, in lines; {1} when not strided
-    bool both = false; // run every data variant normal and inverted
-    bool cross = false; // verify the window of the next thread
-    int width = 32; // bus width of the accesses in bits
-    bool nt = false; // non-temporal stores
-    bool flush = true; // clflush after access
-    u64 reads = 1; // verify passes per job (>= 1)
+    OrderSpec write, verify;   // order, verify_order (defaults to order)
+    bool strided = false;      // either order is a stride order
+    std::vector<u64> strides;  // stride, in lines; {1} when not strided
+    bool both = false;         // run every data variant normal and inverted
+    bool cross = false;        // verify the window of the next thread
+    int width = 32;            // bus width of the accesses in bits
+    bool nt = false;           // non-temporal stores
+    bool flush = true;         // clflush after access
+    u64 reads = 1;             // verify passes per job (>= 1)
     std::vector<u64> dwell_ms; // idle time between write and verify; never empty
-    std::vector<int> disturb; // disturb modes (parse_dmode); {-1} = none
-    u64 disturb_passes = 2; // passes of disturb traffic (>= 1)
+    std::vector<int> disturb;  // disturb modes (parse_dmode); {-1} = none
+    u64 disturb_passes = 2;    // passes of disturb traffic (>= 1)
     static const std::set<std::string>& keys();
     static FillOpts from(const Params& P, const Logger& log);
 };
@@ -139,8 +139,8 @@ struct MarchOpts {
     std::vector<MVar> variants;
     std::vector<std::pair<std::string, OrderSpec>> orders;
     std::vector<u64> strides; // stride, in lines; {1} unless an order is a stride order
-    std::vector<u64> bursts; // burst: lines per element step; never empty
-    bool anyDist = false; // some element is a disturb element X(...)
+    std::vector<u64> bursts;  // burst: lines per element step; never empty
+    bool anyDist = false;     // some element is a disturb element X(...)
     int width = 32;
     bool nt = false, flush = true;
     static const std::set<std::string>& keys();
@@ -150,8 +150,8 @@ struct MarchOpts {
 struct HammerOpts {
     std::vector<u64> rowstride;
     std::vector<u64> aggressors; // aggressor rows per round (n-sided)
-    u64 acts = 400000; // activations per aggressor per round
-    u64 rounds = 24; // rounds per job
+    u64 acts = 400000;           // activations per aggressor per round
+    u64 rounds = 24;             // rounds per job
     static const std::set<std::string>& keys();
     static HammerOpts from(const Params& P);
 };
@@ -159,7 +159,7 @@ struct HammerOpts {
 struct CopyOpts {
     std::vector<std::string> methods = {"memcpy", "movsb",
                                         "ntcopy"}; // method: copy engines to run (case kept for labels)
-    u64 block = 64 * 1024; // block: bytes per copy call (>= 64)
+    u64 block = 64 * 1024;                         // block: bytes per copy call (>= 64)
     static const std::set<std::string>& keys();
     static CopyOpts from(const Params& P);
 };
@@ -173,8 +173,8 @@ struct ChaseOpts {
 
 struct RwstormOpts {
     OrderSpec write{Order::RANDOM, false}; // order (the writer's order)
-    OrderSpec verify; // verify_order (the reader's order, default seq)
-    std::vector<u64> strides; // stride, in lines; {1} unless an order is a stride order
+    OrderSpec verify;                      // verify_order (the reader's order, default seq)
+    std::vector<u64> strides;              // stride, in lines; {1} unless an order is a stride order
     int width = 32;
     bool nt = false, flush = true;
     u64 passes = 4; // passes of rewrite / concurrent verify (>= 1)
@@ -184,13 +184,13 @@ struct RwstormOpts {
 
 struct EvolveOpts {
     OrderSpec write{Order::RANDOM, false}; // order (generation writes)
-    OrderSpec verify; // verify_order (default seq)
-    std::vector<u64> strides; // stride, in lines; {1} unless an order is a stride order
+    OrderSpec verify;                      // verify_order (default seq)
+    std::vector<u64> strides;              // stride, in lines; {1} unless an order is a stride order
     int width = 32;
     bool nt = false, flush = true;
     bool cross = false; // verify the window of the next thread
-    u64 passes = 16; // passes (>= 1)
-    u64 period = 8; // longest update period of a line, in passes (>= 1)
+    u64 passes = 16;    // passes (>= 1)
+    u64 period = 8;     // longest update period of a line, in passes (>= 1)
     static const std::set<std::string>& keys();
     static EvolveOpts from(const Params& P, const Logger& log);
 };
@@ -210,7 +210,7 @@ struct PagemixOpts {
 
 struct CoherencyOpts {
     std::vector<u64> lines = {2, 8, 64};
-    u64 inc = 1000; // inc: increments per thread per round (>= 1)
+    u64 inc = 1000;     // inc: increments per thread per round (>= 1)
     double seconds = 8; // seconds per `lines` value
     static const std::set<std::string>& keys();
     static CoherencyOpts from(const Params& P);

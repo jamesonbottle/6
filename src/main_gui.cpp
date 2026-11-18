@@ -84,13 +84,12 @@ struct App {
     u64 lastErr = 0;
     bool stopRequested = false;
     StopGate gate; // Stop / close rules (stop_gate.h); UI thread only
-    bool mbAuto = true,
-         setting = true;
+    bool mbAuto = true, setting = true;
     std::mutex logMu;
     FILE* log = nullptr;
     std::string lastLine;
     int logWhere = 0;
-    std::atomic<bool> logFailed{false}; // a write to the log file failed (disk full...)
+    std::atomic<bool> logFailed{false};           // a write to the log file failed (disk full...)
     std::unordered_map<HWND, std::wstring> shown; // last text per control, to avoid flicker
     u64 totalMB = 0;
 } A;
@@ -529,8 +528,7 @@ void build_ui() {
     A.setting = false;
 }
 
-void apply_caption_style(
-    HWND h) {
+void apply_caption_style(HWND h) {
     HMODULE dwm = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!dwm)
         return; // System32 only: no DLL search-order hijack

@@ -12,7 +12,7 @@ enum class FlushMode : int {
 
 bool cpu_has_clflushopt(); // CPUID.(EAX=7,ECX=0):EBX bit 23
 void set_flush_mode(FlushMode m);
-bool flush_uses_opt(); // what the hot path will execute now
+bool flush_uses_opt();         // what the hot path will execute now
 const char* flush_mode_name(); // "CLFLUSHOPT" or "CLFLUSH", for the log
 
 extern bool g_flush_opt;

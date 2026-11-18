@@ -3,7 +3,7 @@
 namespace ddr5 {
 
 enum class Avx2Status {
-    Ok, // the CPU has AVX2 and the OS saves the YMM registers
+    Ok,    // the CPU has AVX2 and the OS saves the YMM registers
     NoCpu, // the CPU does not report AVX2 (or AVX)
     NoOs
 };

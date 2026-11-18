@@ -11,7 +11,7 @@ inline constexpr u64 kMB = 1ull << 20;
 inline constexpr u64 kPiece = 2 * kMB;
 
 inline constexpr u64 kAutoPercent = 90; // automatic size: this share of the free memory ...
-inline constexpr u64 kCapPercent = 97; // ... a requested size is capped at this share
+inline constexpr u64 kCapPercent = 97;  // ... a requested size is capped at this share
 inline constexpr u64 kAutoFloor = 512 * kMB;
 inline constexpr u64 kCapFloor = 256 * kMB; // a requested size leaves at least this much too
 inline constexpr u64 kCommitMargin = 256 * kMB;

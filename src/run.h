@@ -133,8 +133,8 @@ struct Run {
         u64 regionBytes; // size of the tested region; 0 before it is allocated
         u64 vtotal;
         u64 pagesCovered;
-        u64 pagesTotal; // whole pages in the region; 0 before it is allocated
-        u64 errors; // bad lines so far
+        u64 pagesTotal;    // whole pages in the region; 0 before it is allocated
+        u64 errors;        // bad lines so far
         std::string label; // the running test
     };
     Status status() const {

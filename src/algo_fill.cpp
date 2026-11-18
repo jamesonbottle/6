@@ -118,8 +118,7 @@ void algo_fill(Run& R, const Params& P) {
                             R.report(tid, a, e, act, "verify");
                     });
                 if (o.reads && !R.stop && skip != 1)
-                    R.mark_verified(vw.base,
-                                    vw.n);
+                    R.mark_verified(vw.base, vw.n);
             });
         });
         DDR5_INJECT(extra_sync, R, tid);

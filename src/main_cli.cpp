@@ -80,8 +80,7 @@ int main(int argc, char** argv) {
             }
             return x;
         };
-        auto choice = [&](std::initializer_list<const char*> names)
-            -> int {
+        auto choice = [&](std::initializer_list<const char*> names) -> int {
             std::string v = lower(nx());
             if (bad)
                 return -1;
@@ -134,8 +133,7 @@ int main(int argc, char** argv) {
             int k = choice({"default", "splitmix", "murmur", "xorshift"});
             if (k >= 0)
                 s.rngMode = (Rng)k; // same order as the enum
-        } else if (a ==
-                   "--seed") {
+        } else if (a == "--seed") {
             std::string v = nx();
             if (!bad) {
                 bool hex = v.size() > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X');

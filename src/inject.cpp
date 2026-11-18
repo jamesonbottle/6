@@ -137,9 +137,9 @@ void march_after_element(int tid, size_t ji, size_t ei, const View& w) {
 // self-test only (chase, 32 chains of the first seed, after the lines are written)
 void chase_after_fill(int tid, u64 sd, u64 K, const View& w, const Order& o, u64 steps) {
     if (tid == 0 && sd == 0 && K == 32 && steps > 64) {
-        flip(w.base, o.at(steps / 2), 40, 0x10); // chain 0 covers order positions [0, steps)
+        flip(w.base, o.at(steps / 2), 40, 0x10);    // chain 0 covers order positions [0, steps)
         flip(w.base, o.at(steps / 2 + 3), 0, 0x01); // chain 0 again, a few lines on
-        flip(w.base, o.at(steps + 7), 0, 0x01); // chain 1 covers [steps, 2 * steps)
+        flip(w.base, o.at(steps + 7), 0, 0x01);     // chain 1 covers [steps, 2 * steps)
         _mm_mfence();
     }
 }

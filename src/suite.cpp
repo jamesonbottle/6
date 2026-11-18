@@ -149,11 +149,10 @@ struct SuiteDriver {
     u64 runSeed = 0;
     std::vector<TestDef> sel;
     u64 avail = 0; // free physical memory (0 = the OS would not say)
-    u64 per = 0; // bytes tested by each thread
+    u64 per = 0;   // bytes tested by each thread
     u64 total = 0; // bytes tested in all
     bool gotLP = false, locked = false;
-    bool stoppedInAlloc =
-        false;
+    bool stoppedInAlloc = false;
     std::string allocNote;
     int failedTests = 0;
     std::vector<std::string> failedNames;
@@ -194,8 +193,7 @@ struct SuiteDriver {
             ScopeExit regionGuard([&] { release_region(); });
             prepare_region();
             FpuThreads fpu;
-            ScopeExit fpuGuard(
-                [&] { fpu.stop(); });
+            ScopeExit fpuGuard([&] { fpu.stop(); });
             if (s.stressFpu)
                 fpu.start(R.layout.T);
             const double t0 = plat::now();

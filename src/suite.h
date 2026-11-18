@@ -12,9 +12,9 @@ namespace ddr5 {
 
 // The enumerators are in the order of the CLI --cache / GUI "CPU cache" and "Test set" lists
 enum class CacheMode : int {
-    Default, // per test
-    Bypass, // clflush every access
-    Cached, // plain cached stores
+    Default,     // per test
+    Bypass,      // clflush every access
+    Cached,      // plain cached stores
     NonTemporal, // non-temporal stores
 };
 enum class SuiteSet : int {
@@ -23,25 +23,22 @@ enum class SuiteSet : int {
 };
 
 struct Settings {
-    u64 megabytes = 0; // 0 = auto (90% of free memory)
-    int threads = 0; // 0 = all logical CPUs
+    u64 megabytes = 0;       // 0 = auto (90% of free memory)
+    int threads = 0;         // 0 = all logical CPUs
     bool stopOnError = true; // beeping is done by the front-end
     CacheMode cacheMode = CacheMode::Default;
-    FlushMode flushMode =
-        FlushMode::Auto;
+    FlushMode flushMode = FlushMode::Auto;
     Rng rngMode = Rng::Default; // hash mixer for 'hash' data; Default = SplitMix
     bool stressFpu = false;
     bool largePages = true;
     SuiteSet suite = SuiteSet::Full;
     std::string logFile = "ddr5test.log";
-    bool logFileSet =
-        false;
+    bool logFileSet = false;
     u64 coverageStop = 0;
     double minutes = 0;
     u64 loops = 0;
     std::string filter;
-    u64 testSeconds =
-        0;
+    u64 testSeconds = 0;
     bool seedSet = false;
     u64 seed = 0;
 };
