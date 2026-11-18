@@ -1,0 +1,70 @@
+name: gui-probe
+on:
+  push:
+    branches: [gui-probe]
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        shell: cmd
+        run: build.bat
+      - name: Start the GUI, dump its windows, take screenshots
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
+          public class W {
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);
+            [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc f, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+            [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+            public static List<string> Dump(IntPtr parent) {
+              var rows = new List<string>(); int z = 0;
+              EnumChildWindows(parent, (h, l) => {
+                var c = new StringBuilder(64); GetClassName(h, c, 64);
+                var t = new StringBuilder(80); GetWindowText(h, t, 80);
+                RECT r; GetWindowRect(h, out r);
+                rows.Add(string.Format("z={0,2} id={1,4} vis={2} {3,-16} [{4},{5} {6}x{7}] '{8}'", z++, GetDlgCtrlID(h), IsWindowVisible(h) ? 1 : 0, c, r.L, r.T, r.R - r.L, r.B - r.T, t.ToString().Replace("\n", " ")));
+                return true; }, IntPtr.Zero);
+              return rows; }
+          }
+          "@
+          $exe = Join-Path $PWD "build\ddr5ramtest.exe"
+          $p = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 5
+          $h = [W]::FindWindow("Ddr5RamTestWindow", $null)
+          "main window handle: $h  alive: $(-not $p.HasExited)  dpi: $([W]::GetDpiForWindow($h))" | Tee-Object probe.txt
+          $r = New-Object W+RECT; [void][W]::GetWindowRect($h, [ref]$r)
+          "main rect: $($r.L),$($r.T) $($r.R - $r.L)x$($r.B - $r.T)" | Tee-Object probe.txt -Append
+          "screen: $([System.Windows.Forms.Screen]::PrimaryScreen)" | Out-Null
+          "--- children, z-order from TOP to bottom ---" | Tee-Object probe.txt -Append
+          [W]::Dump($h) | Tee-Object probe.txt -Append
+          $w = $r.R - $r.L; $hh = $r.B - $r.T
+          $bmp = New-Object System.Drawing.Bitmap $w, $hh
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $dc = $g.GetHdc()
+          [void][W]::PrintWindow($h, $dc, 2); $g.ReleaseHdc($dc); $g.Dispose()
+          $bmp.Save("printwindow.png"); $bmp.Dispose()
+          $bmp2 = New-Object System.Drawing.Bitmap $w, $hh
+          $g2 = [System.Drawing.Graphics]::FromImage($bmp2)
+          $g2.CopyFromScreen($r.L, $r.T, 0, 0, $bmp2.Size); $g2.Dispose()
+          $bmp2.Save("screen.png"); $bmp2.Dispose()
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-probe
+          path: |
+            probe.txt
+            printwindow.png
+            screen.png

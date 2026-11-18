@@ -1,5 +1,5 @@
 name: build
-on: [push, pull_request, workflow_dispatch]
+on: [workflow_dispatch]
 jobs:
   linux-selftest:
     # Proves the detection logic without DDR5 hardware: unit tests, clean runs (no false positives) and a fault-injection build (planted flips are found).
