@@ -108,5 +108,6 @@ src/app.rc, app.manifest  version resource, visual styles, DPI
 tools/unit_tests.cpp   unit tests
 tools/selftest.sh      unit + clean + injection runs
 tools/inject_checks.sh portable injection checks
+tools/gui_smoke.ps1    starts the GUI and checks its layout (Windows CI)
 tools/format.sh        clang-format (--check in CI)
 ```

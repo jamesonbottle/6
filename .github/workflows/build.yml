@@ -78,6 +78,11 @@ jobs:
           build\ddr5test_cli.exe --version || exit /b 1
           build\ddr5test_cli.exe -mb 2 -t 1 --no-large-pages --test-seconds 2 -f "Bulk copy" --seed 777 > seed.out 2>&1 || exit /b 1
           findstr /C:"run seed: 0x0000000000000309 (given)" seed.out || exit /b 1
+      - name: GUI smoke test (starts the GUI: the tab control must be below the page controls and the page text drawn)
+        # Catches a page that is blank under its tabs (the tab control above the page controls hides them). Needs a desktop,
+        # which the Windows runner has; see tools/gui_smoke.ps1.
+        shell: pwsh
+        run: ./tools/gui_smoke.ps1 build\ddr5ramtest.exe
       - uses: actions/upload-artifact@v4
         with:
           name: ddr5ramtest
